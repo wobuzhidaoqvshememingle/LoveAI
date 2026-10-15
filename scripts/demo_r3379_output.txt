@@ -1,0 +1,32 @@
+﻿====================================================================
+R3.3-79 活关系星图·NPC次级网络与家庭/伦理关系建模 演示
+====================================================================
+
+[指标] 桥数=6 事件入=13 成功转换=13 仲裁=1
+
+====================================================================
+  [PASS] NPC↔NPC 边真实生成(4条) 非星形边=4 条，均带 stance=[-0.6, -0.5, 0.5, 0.4]
+  [PASS] 派系聚类出反对派/助攻派 labels=['反对派', '助攻派']
+  [PASS] 反对派成员=前任+她父母 members=['前任', '她妈', '她爸']
+  [PASS] 助攻派成员=闺蜜+我方父母 members=['闺蜜', '我妈', '我爸']
+  [PASS] 意见领袖已识别(前任/闺蜜) opp_leader=前任, sup_leader=闺蜜
+  --- factions: {"f_0": {"id": "f_0", "name": "反对派·她妈", "label": "反对派", "stance": -0.5333, "members": ["n_0_8874", "n_1_26255", "n_2_57999"], "opinion_leader": "n_0_8874", "size": 3, "risk_hint": "反对派立场：需要差异化应对，不硬碰硬", "opportunity_hint": ""}, "f_1": {"id": "f_1", "name": "助攻派·闺蜜", "label": "助攻派", "stance": 0.5, "members": ["n_3_12051", "n_4_8409", "n_5_25171"], "opinion_leader": "n_3_12051", "size": 3, "risk_hint": "", "opportunity_hint": "助攻派立场：可借力放大正向声音"}}
+  [PASS] 家庭字段可手工录入 family_structure=双亲 parents_status=离婚中 siblings=['姐姐']
+  [PASS] 聊天自动提取家庭线索 auto family_structure=双亲 parents_status=离婚中 siblings=['姐姐']
+  [PASS] 缺失家庭字段标'未知'不臆造 family_structure=未知 parents_status=未知
+  [PASS] 伦理标记带风险/机会提示且无价值判断 ex=前任网络活跃: 前任仍在频繁联系，需留意三角张力 | sibling=兄弟姐妹好感: 亲属对我方示好，需明确边界、不模糊关系
+  [PASS] NPC网络→任务决策真实注入(含派系/家庭/伦理源) 任务数 0 -> 9
+  [PASS] 派系活数据进任务决策 样例: ['反对派立场：前任及小团体持负面立场，差异化应对、不硬碰硬']
+  [PASS] 家庭背景活数据进任务决策 样例: ['她父母关系状态离婚中：不卷入、稳住自身节奏、不评价']
+  [PASS] 伦理标记活数据进任务决策 样例: ['该关系带风险提示：前任仍在频繁联系，需留意三角张力，明确边界、不模糊关系']
+  --- influential_with_network(前2条摘要): [{"name": "前任", "relation_type": "前任", "faction_label": "反对派", "faction_stance": -0.5333, "family": {"family_structure": "未知", "parents_status": "未知", "siblings": [], "atmosphere": "未知", "evidence": [], "manual": false}, "ethical_marks": [{"flag": "ex_network_active", "label": "前任网络活跃", "risk_hint": "前任仍在频繁联系，需留意三角张力", "opportunity_hint": "前任立场若松动，可转化为背书", "evidence": ["前任还在她家附近活动"]}]}, {"name": "她妈", "relation_type": "家人", "faction_label": "反对派", "faction_stance": -0.5333, "family": {"family_structure": "未知", "parents_status": "未知", "siblings": [], "atmosphere": "未知", "evidence": [], "manual": false}, "ethical_marks": []}]
+  [PASS] 任务结果回写NPC立场(前任 -0.7 -> -0.55) -0.7 -> -0.5499999999999999
+  [PASS] NPC_STANCE_CHANGED 事件真实发出 last={'person_id': 'r3379_demo', 'npc_name': '前任', 'stance_before': -0.7, 'stance_after': -0.5499999999999999, 'delta': 0.15}
+  [PASS] NPC_FACTION_UPDATED 事件真实发出(派系重算) 重算后派系数=2
+  [PASS] 反对派 stance 随成员上修而减弱 -0.533 -> -0.483
+  --- network_summary: {"last_influence": [{"name": "前任", "relation_type": "前任", "intimacy": 45, "influence_on_strategy": "竞争预警+差异化反制", "tag": "前任仍在联系", "affection_delta": -5, "faction": "f_0", "faction_label": "反对派", "faction_stance": -0.5333, "family": {"family_structure": "未知", "parents_status": "未知", "siblings": [], "atmosphere": "未知", "evidence": [], "manual": false}, "ethical_marks": [{"flag": "ex_network_active", "label": "前任网络活跃", "risk_hint": "前任仍在频繁联系，需留意三角张力", "opportunity_hint": "前任立场若松动，可转化为背书", "evidence": ["前任还在她家附近活动"]}]}, {"name": "她妈", "relation_type": "家人", "intimacy": 50, "influence_on_strategy": "影响长期推进节奏", "tag": "家人态度", "affection_delta": 1, "faction": "f_0", "faction_label": "反对派", "faction_stance": -0.5333, "family": {"family_structure": "未知", "parents_status": "未知", "siblings": [], "atmosphere": "未知", "evidence": [], "manual": false}, "ethical_marks": []}, {"name": "她爸", "relation_type": "家人", "intimacy": 35, "influence_on_strategy": "影响长期推进节奏", "tag": "家人态度", "affection_delta": 1, "faction": "f_0", "faction_label": "反对派", "faction_stance": -0.5333, "family": {"family_structure": "未知", "parents_status": "未知", "siblings": [], "atmosphere": "未知", "evidence": [], "manual": false}, "ethical_marks": []}, {"name": "闺蜜", "relation_type": "朋友", "intimacy": 70, "influence_on_strategy": "可生成\"先搞定闺蜜\"支线", "tag": "闺蜜/朋友认可", "affection_delta": 2, "faction": "f_1", "faction_label": "助攻派", "faction_stance": 0.5, "family": {"family_structure": "未知", "parents_status": "未知", "siblings": [], "atmosphere": "未知", "evidence": [], "manual": false}, "ethical_marks": [{"flag": "sibling_affection", "label": "兄弟姐妹好感", "risk_hint": "亲属对我方示好，需明确边界、不模糊关系", "opportunity_hint": "", "evidence": []}]}, {"name": "我妈", "relation_type": "家人", "intimacy": 55, "influence_on_strategy": "影响长期推进节奏", "tag": "家人态度", "affection_delta": 1, "faction": "f_1", "faction_label": "助攻派", "faction_stance": 0.5, "family": {"family_structure": "未知", "parents_status": "未知", "siblings": [], "atmosphere": "未知", "evidence": [], "manual": false}, "ethical_marks": []}, {"name": "我爸", "relation_type": "家人", "intimacy": 40, "influence_on_strategy": "影响长期推进节奏", "tag": "家人态度", "affection_delta": 1, "faction": "f_1", "faction_label": "助攻派", "faction_stance": 0.5, "family": {"family_structure": "未知", "parents_status": "未知", "siblings": [], "atmosphere": "未知", "evidence": [], "manual": false}, "ethical_marks": []}], "created_tasks": 9, "last_stance_changes": [{"npc_name": "前任", "before": -0.7, "after": -0.5499999999999999, "delta": 0.15}], "last_factions": [{"id": "f_0", "name": "反对派·她妈", "label": "反对派", "stance": -0.4833, "members": ["n_0_8874", "n_1_26255", "n_2_57999"], "opinion_leader": "n_0_8874", "size": 3, "risk_hint": "反对派立场：需要差异化应对，不硬碰硬", "opportunity_hint": ""}, {"id": "f_1", "name": "助攻派·闺蜜", "label": "助攻派", "stance": 0.5, "members": ["n_3_12051", "n_4_8409", "n_5_25171"], "opinion_leader": "n_3_12051", "size": 3, "risk_hint": "", "opportunity_hint": "助攻派立场：可借力放大正向声音"}]}
+  [PASS] layout_graph 透传新字段(节点/边) node0 keys=['color', 'ethical_marks', 'faction', 'faction_stance', 'family', 'id', 'intimacy', 'name', 'relation_type', 'size', 'stance', 'x', 'y', 'z'], edge0 has stance=True
+  [PASS] to_dict 全 JSON 可序列化且含新键 顶层键=['center', 'colors', 'edges', 'factions', 'family_context', 'nodes']
+  [PASS] 前端可消费：已布局图带 family/伦理/派系/stance 字段 n_nodes=7 n_edges=4
+====================================================================
+结果：ALL PASS —— R3.3-79 全链路真接线验证通过

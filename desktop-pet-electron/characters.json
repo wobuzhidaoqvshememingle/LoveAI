@@ -1,0 +1,138 @@
+{
+  "current": "cybergf",
+  "characters": [
+    {
+      "id": "cybergf",
+      "name": "小妖女·系统精灵",
+      "imagePath": "../assets/models/cybergf/character.png",
+      "scale": 1.0,
+      "motionGroups": {},
+      "tapLines": [
+        "嗯？怎么啦~",
+        "别戳我啦",
+        "嘿嘿，在呢",
+        "你在看什么呀？",
+        "这步策略想好了吗？",
+        "摸摸头可以，加油哦",
+        "今天关系有进展吗？",
+        "我一直在帮你盯着呢"
+      ],
+      "idleTalk": [
+        "你在忙什么呢？",
+        "今天也要加油哦",
+        "嘿嘿~",
+        "别太累了",
+        "我就在你旁边帮你分析",
+        "有什么烦心事吗？说出来一起看看"
+      ]
+    },
+    {
+      "id": "haru",
+      "name": "Haru",
+      "modelPath": "../assets/models/haru/Haru.model3.json",
+      "scale": 1.0,
+      "motionGroups": {
+        "idle": ["Idle"],
+        "thinking": ["TapBody"],
+        "speaking": ["TapBody"],
+        "happy": ["TapBody"],
+        "surprised": ["TapBody"]
+      },
+      "tapLines": [
+        "嗯？",
+        "怎么啦~",
+        "别戳我啦",
+        "嘿嘿",
+        "今天要分析哪段对话？",
+        "摸摸头~",
+        "我在呢",
+        "有什么要复盘的吗？"
+      ],
+      "idleTalk": [
+        "今天天气不错呢",
+        "你在忙什么呀？",
+        "嘿嘿~",
+        "咱们看看今天的进展吧",
+        "来，一起理一理关系脉络",
+        "工作别太累了哦"
+      ]
+    },
+    {
+      "id": "hiyori",
+      "name": "Hiyori·系统精灵",
+      "modelPath": "../assets/models/hiyori/Hiyori.model3.json",
+      "scale": 1.0,
+      "motionGroups": {
+        "idle": ["Idle"],
+        "thinking": ["TapBody"],
+        "speaking": ["TapBody"],
+        "happy": ["TapBody"],
+        "surprised": ["TapBody"]
+      },
+      "tapLines": [
+        "嗯？",
+        "怎么啦~",
+        "别戳我啦",
+        "嘿嘿",
+        "今天要分析哪段对话？",
+        "我在呢",
+        "有什么要复盘的吗？"
+      ],
+      "idleTalk": [
+        "你在忙什么呀？",
+        "嘿嘿~",
+        "咱们看看今天的进展吧",
+        "来，一起理一理脉络",
+        "别太累了哦"
+      ]
+    },
+    {
+      "id": "ninghai",
+      "name": "宁海·东煌精灵",
+      "modelPath": "../assets/models/ninghai/ninghai_4.model3.json",
+      "scale": 1.0,
+      "motionGroups": {
+        "idle": ["Idle"],
+        "thinking": ["TapTouchBody"],
+        "speaking": ["TapTouchBody"],
+        "happy": ["TapTouchBody"],
+        "surprised": ["TapTouchSpecial"]
+      },
+      "tapLines": [
+        "嗯？",
+        "怎么啦~",
+        "别戳我啦",
+        "嘿嘿",
+        "今天要分析哪段对话？",
+        "我在呢",
+        "有什么要复盘的吗？"
+      ],
+      "idleTalk": [
+        "你在忙什么呀？",
+        "嘿嘿~",
+        "咱们看看今天的进展吧",
+        "来，一起理一理脉络",
+        "别太累了哦"
+      ]
+    },
+    {
+      "id": "placeholder",
+      "name": "小团",
+      "modelPath": "",
+      "scale": 1.0,
+      "motionGroups": {},
+      "tapLines": [
+        "嗯？",
+        "戳我干嘛~",
+        "嘿嘿",
+        "在呢在呢",
+        "摸摸头舒服~"
+      ],
+      "idleTalk": [
+        "发呆中...",
+        "今天也要加油哦",
+        "哼~"
+      ]
+    }
+  ]
+}

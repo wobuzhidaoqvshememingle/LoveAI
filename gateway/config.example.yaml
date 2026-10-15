@@ -1,0 +1,96 @@
+# =============================================================================
+# LoveAI Gateway 示例配置
+# 复制为 config.yaml 后按需修改。
+# 敏感字段 (api_key) 不要写在这里, 通过环境变量注入, 或启动后在仪表盘右上角粘贴。
+# =============================================================================
+
+# 监听地址。生产部署改成 0.0.0.0 才能被外部访问; 仅本机用保持 127.0.0.1。
+host: 0.0.0.0
+port: 8787
+
+# 路由策略: auto | priority | cost_first | latency_first | quality_first | load_balance
+default_strategy: auto
+
+# fallback 链最大尝试次数
+fallback_max_tries: 3
+
+# 断路器: 连续失败 N 次 open, open 持续 open_sec 秒后半开放试探
+circuit_breaker_failure_threshold: 3
+circuit_breaker_open_sec: 300
+circuit_breaker_half_open_trial: 1
+
+# 数据目录 (SQLite + 主密钥 + 日志)
+data_dir: ./data
+
+# --------------------------------------------------------------------------- #
+# 对话压缩 (超长对话自动摘要, 省 token)
+# --------------------------------------------------------------------------- #
+compression:
+  enabled: true
+  min_messages_to_compress: 8        # 对话超过 N 条才压缩
+  retain_last_n_messages: 4         # 保留最近 N 条原文
+  summarize_system_prompt: true
+  skip_compression_models: []       # 命中子串的模型不压缩, 如 ["o1", "o3"]
+
+# --------------------------------------------------------------------------- #
+# 安全
+# --------------------------------------------------------------------------- #
+security:
+  # 调用方访问网关需要的 Key。留空 = 不鉴权 (仅建议本机用)。
+  gateway_api_key: ""
+  # 落库 Key 是否加密
+  encrypt_keys_at_rest: true
+  # AES-256-GCM 主密钥来源的环境变量名
+  master_key_env: GATEWAY_MASTER_KEY
+  # 是否记录请求/响应正文 (默认只记元数据, 防止泄露隐私)
+  log_payloads: false
+
+# --------------------------------------------------------------------------- #
+# 厂商列表
+# 每个 provider 的 api_key 推荐通过环境变量注入:
+#   GATEWAY_PROVIDER_<NAME大写>_API_KEY
+# 例如 name=groq -> GATEWAY_PROVIDER_GROQ_API_KEY
+# 也可以启动后在仪表盘右上角直接粘贴 Key, 网关自动识别厂商。
+# --------------------------------------------------------------------------- #
+providers:
+  # ---- OpenAI 官方 (需充值) ----
+  - name: openai
+    type: openai_compatible
+    base_url: https://api.openai.com/v1
+    # api_key: ""                       # 走环境变量 OPENAI_API_KEY
+    api_key_env: OPENAI_API_KEY
+    models:
+      - gpt-4o-mini
+      - gpt-4o
+      - gpt-4.1-mini
+    priority: 100
+    cost_tier: high
+    enabled: true
+
+  # ---- Groq (免费极速, 注册即送额度) ----
+  - name: groq
+    type: openai_compatible
+    base_url: https://api.groq.com/openai/v1
+    # api_key: ""                       # 走环境变量 GROQ_API_KEY
+    api_key_env: GROQ_API_KEY
+    models:
+      - llama-3.3-70b-versatile
+      - llama-3.1-8b-instant
+      - mixtral-8x7b-32768
+    priority: 50                        # 数字越小优先级越高, 先试 Groq 省成本
+    cost_tier: free
+    rpm_limit: 30
+    tpm_limit: 30000
+    enabled: true
+
+  # ---- Ollama (完全本地, 不需要 Key) ----
+  - name: ollama
+    type: ollama
+    base_url: http://localhost:11434/v1
+    # 本地服务, 不需要 api_key
+    models:
+      - qwen2.5:7b
+      - llama3.1:8b
+    priority: 200
+    cost_tier: free
+    enabled: true

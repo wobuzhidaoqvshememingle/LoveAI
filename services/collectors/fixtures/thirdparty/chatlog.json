@@ -1,0 +1,11 @@
+{
+  "type": "chatlog",
+  "version": "v1",
+  "data": [
+    {"msgId": "c1", "talker": "wxid_target", "speaker": "self", "content": "在吗", "createTime": "2026-01-01 12:00:00", "timestamp": 1767240000},
+    {"msgId": "c2", "talker": "wxid_target", "speaker": "other", "content": "在的怎么了", "createTime": "2026-01-01 12:01:00", "timestamp": 1767240060},
+    {"msgId": "c3", "talker": "wxid_target", "speaker": "self", "content": "晚上一起吃饭吗", "createTime": "2026-01-01 12:02:00", "timestamp": 1767240120},
+    {"msgId": "c4", "talker": "wxid_target", "speaker": "other", "content": "好呀几点", "createTime": "2026-01-01 12:03:00", "timestamp": 1767240180},
+    {"msgId": "c5", "talker": "wxid_target", "speaker": "self", "content": "七点老地方", "createTime": "2026-01-01 12:04:00", "timestamp": 1767240240}
+  ]
+}

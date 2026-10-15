@@ -1,0 +1,28 @@
+{
+  "app": "io.drawcore.wx",
+  "version": "1.0",
+  "talker": "wxid_target",
+  "talker_name": "小美",
+  "messages": [
+    {
+      "is_send": true,
+      "content": "在吗",
+      "time": "2024-01-01 20:00:01"
+    },
+    {
+      "is_send": false,
+      "content": "在的怎么了",
+      "time": "2024-01-01 20:00:02"
+    },
+    {
+      "is_send": true,
+      "content": "晚上一起吃饭吗",
+      "time": "2024-01-01 20:00:03"
+    },
+    {
+      "is_send": false,
+      "content": "好呀几点",
+      "time": "2024-01-01 20:00:04"
+    }
+  ]
+}

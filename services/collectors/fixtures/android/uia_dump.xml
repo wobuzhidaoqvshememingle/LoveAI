@@ -1,0 +1,47 @@
+<?xml version='1.0' encoding='UTF-8' standalone='yes' ?>
+<hierarchy rotation="0">
+  <node index="0" text="" resource-id="com.tencent.mm:id/akp" class="android.widget.FrameLayout"
+        package="com.tencent.mm" content-desc="" checkable="false" checked="false"
+        clickable="false" enabled="true" focusable="false" focused="false" scrollable="false"
+        long-clickable="false" password="false" selected="false" bounds="[0,0][1080,2400]">
+    <!-- 对方消息（左，received）bounds 偏左 -->
+    <node index="0" text="在的怎么了" resource-id="com.tencent.mm:id/b2k"
+          class="android.widget.TextView" package="com.tencent.mm"
+          content-desc="" checkable="false" checked="false" clickable="false"
+          enabled="true" focusable="false" focused="false" scrollable="false"
+          long-clickable="false" password="false" selected="false"
+          bounds="[120,400][600,520]"/>
+    <!-- 我发的消息（右，sent）bounds 偏右 -->
+    <node index="1" text="在吗" resource-id="com.tencent.mm:id/b2k"
+          class="android.widget.TextView" package="com.tencent.mm"
+          content-desc="" checkable="false" checked="false" clickable="false"
+          enabled="true" focusable="false" focused="false" scrollable="false"
+          long-clickable="false" password="false" selected="false"
+          bounds="[660,600][960,720]"/>
+    <node index="2" text="好呀几点" resource-id="com.tencent.mm:id/b2k"
+          class="android.widget.TextView" package="com.tencent.mm"
+          content-desc="" checkable="false" checked="false" clickable="false"
+          enabled="true" focusable="false" focused="false" scrollable="false"
+          long-clickable="false" password="false" selected="false"
+          bounds="[120,800][520,920]"/>
+    <node index="3" text="晚上一起吃饭吗" resource-id="com.tencent.mm:id/b2k"
+          class="android.widget.TextView" package="com.tencent.mm"
+          content-desc="" checkable="false" checked="false" clickable="false"
+          enabled="true" focusable="false" focused="false" scrollable="false"
+          long-clickable="false" password="false" selected="false"
+          bounds="[600,1000][960,1120]"/>
+    <!-- 非消息节点：标题栏/输入框，应被过滤 -->
+    <node index="4" text="小美" resource-id="com.tencent.mm:id/azm"
+          class="android.widget.TextView" package="com.tencent.mm"
+          content-desc="" checkable="false" checked="false" clickable="false"
+          enabled="true" focusable="false" focused="false" scrollable="false"
+          long-clickable="false" password="false" selected="false"
+          bounds="[300,80][780,200]"/>
+    <node index="5" text="发送" resource-id="com.tencent.mm:id/b3m"
+          class="android.widget.TextView" package="com.tencent.mm"
+          content-desc="" checkable="false" checked="false" clickable="true"
+          enabled="true" focusable="false" focused="false" scrollable="false"
+          long-clickable="false" password="false" selected="false"
+          bounds="[960,2200][1060,2320]"/>
+  </node>
+</hierarchy>

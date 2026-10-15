@@ -1,0 +1,16 @@
+services:
+  gateway:
+    build: .
+    container_name: loveai-gateway
+    ports:
+      - "8787:8787"
+    volumes:
+      - gateway-data:/app/data
+    environment:
+      # 可选: 显式指定 32 字节主密钥 (hex 或 base64)。
+      # 不设置则首次启动自动生成并持久化到 /app/data/.master_key
+      - GATEWAY_MASTER_KEY=${GATEWAY_MASTER_KEY:-}
+    restart: unless-stopped
+
+volumes:
+  gateway-data:

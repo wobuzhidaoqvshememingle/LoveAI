@@ -1,0 +1,7 @@
+{
+  "name": "custom_phrases",
+  "version": "1.0.0",
+  "author": "LoveAI",
+  "description": "自定义话术库：在回复生成时优先使用外部自定义话术",
+  "entry": "plugin.py"
+}

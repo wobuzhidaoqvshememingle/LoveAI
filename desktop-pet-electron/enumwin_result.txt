@@ -1,0 +1,10 @@
+﻿h=8717414 pid=62368 vis=True L=1096 T=214 R=1496 B=817
+h=8455920 pid=59888 vis=False L=0 T=0 R=0 B=0
+h=2557416 pid=62368 vis=False L=0 T=0 R=0 B=0
+h=11993642 pid=62368 vis=False L=0 T=0 R=0 B=0
+h=4458232 pid=62368 vis=False L=102 T=102 R=1254 B=707
+h=4064400 pid=62368 vis=False L=0 T=0 R=0 B=0
+h=10421572 pid=62368 vis=False L=0 T=0 R=0 B=0
+h=6226350 pid=62368 vis=False L=0 T=0 R=0 B=0
+h=18219958 pid=59888 vis=False L=0 T=0 R=0 B=0
+

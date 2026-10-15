@@ -1,0 +1,73 @@
+# ============================================================
+# LoveAI CI
+# - Windows 主链路 (PySide6/pywin32/微信 PC 依赖): 矩阵 Python 3.11/3.12 跑 pytest
+# - Linux 轻量检查: 仅对纯 Python 的 gateway 做语法/导入级校验
+#   (主程序 requirements.txt 含 pywin32/pymem/pywinauto/pywxdump/pywechat127
+#    等 Windows 专属包, 在 ubuntu 上无法安装, 故 Linux 不装主程序依赖)
+# ============================================================
+name: CI
+
+on:
+  push:
+    branches: [main, master, develop]
+  pull_request:
+    branches: [main, master, develop]
+
+jobs:
+  test-windows:
+    name: Windows · py${{ matrix.python-version }} · pytest
+    runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11", "3.12"]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+
+      - name: Upgrade pip
+        run: python -m pip install --upgrade pip
+
+      - name: Install main requirements (Windows-only)
+        run: python -m pip install -r requirements.txt
+
+      - name: Install gateway requirements
+        run: python -m pip install -r gateway/requirements.txt
+
+      - name: pytest (离线核心集)
+        # tests/conftest.py 会自动：1) collect_ignore 排除需外网/重环境的集成测试；
+        # 2) 默认阻断外网 socket（@pytest.mark.network 才放行），保证 CI 确定性。
+        run: python -m pytest tests/ -q
+
+  gateway-linux-smoke:
+    name: Linux · gateway syntax/import smoke
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Upgrade pip
+        run: python -m pip install --upgrade pip
+
+      - name: Install gateway requirements (pure Python)
+        run: python -m pip install -r gateway/requirements.txt
+
+      - name: Compile gateway/app
+        run: python -m compileall -q gateway/app
+
+      - name: Import gateway FastAPI app
+        working-directory: gateway
+        run: |
+          python -c "from app.main import app; print('gateway app import OK:', type(app).__name__)"

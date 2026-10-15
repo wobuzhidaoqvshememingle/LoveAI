@@ -1,0 +1,8 @@
+[
+  "[mouth-sync] {\"set\":0.9,\"readBack\":0.8999999761581421}",
+  "[look-sync +internalUpdate] {\"eyeBallX\":null,\"eyeBallY\":null,\"angleX\":null,\"angleY\":null}",
+  "[eye-sync] {\"set\":0.1,\"readBackL\":null,\"readBackR\":null}",
+  "[breath-seq] [\"{\\\"breath\\\":218.62720000001684,\\\"body\\\":null}\",\"{\\\"breath\\\":219.43680000001692,\\\"body\\\":null}\",\"{\\\"breath\\\":220.316800000017,\\\"body\\\":null}\",\"{\\\"breath\\\":221.19680000001708,\\\"body\\\":null}\"]",
+  "[expr-happy] {\"hasEm\":true,\"exprNames\":\"n/a\"}",
+  "[shot] live2d_shot_happy.png bytes=30952"
+]

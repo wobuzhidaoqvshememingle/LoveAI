@@ -1,0 +1,160 @@
+# ============================================================
+# LoveAI .gitignore
+# 分组: Python / Node / 运行期数据 / 构建产物 / 日志 /
+#       本地模型与缓存 / 密钥与环境 / 备份与临时文件
+# ============================================================
+
+# ---------- Python 虚拟环境与缓存 ----------
+.venv/
+venv/
+env/
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+.coverage.*
+htmlcov/
+coverage.xml
+
+# ---------- Node / Electron ----------
+node_modules/
+desktop-pet-electron/node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# ---------- 运行期数据 (数据库 / 向量库 / 用户私有数据) ----------
+# 整目录忽略: 含聊天库、FTS、Chroma、备份、截图等用户私有数据, 不入库。
+# 如想在仓库里保留一个空目录示例, 可自行加 !data/.gitkeep 之类反向例外。
+data/
+!data/.gitkeep
+*.db
+*.db-shm
+*.db-wal
+*.sqlite
+*.sqlite3
+chroma_db/
+*search*.db
+loveai.db
+unified_search.db
+
+# ---------- 构建 / 打包产物 ----------
+build/
+dist/
+dist_bundle/
+installer_output/
+desktop-pet-electron/dist/
+*.spec.bak
+*.spec.bak_*
+# PyInstaller 中间物 (LoveAI.spec 本身入库, 仅忽略其生成缓存)
+*.manifest
+
+# ---------- 日志 ----------
+logs/
+*.log
+*.log.*
+
+# ---------- 本地大模型 / 本地推理运行时 (体积巨大, 单独下载) ----------
+models_local/
+ollama_data/
+
+# ---------- 工具/脚本产生的验证输出目录 ----------
+# 各类 *_output/ 验证/扫描/压测产物
+*_output/
+bpd_verification_output/
+npd_verification_output/
+
+# ---------- 运行期状态 ----------
+.state/
+_mem/
+*.pid
+
+# ---------- 密钥 / 环境变量 ----------
+.env
+.env.*
+!.env.example
+config.local.json
+secrets.*
+*.key
+*.pem
+# 网关配置里可能含明文 Key, 仅保留 example
+gateway/config.yaml
+!gateway/config.example.yaml
+
+# ---------- 备份 / 临时文件 ----------
+backups/
+*.bak
+*.bak_*
+*.orig
+*.tmp
+*.temp
+# 启动冒烟临时日志 (开发/CI 残留)
+_boot_smoke*
+gateway/_boot_smoke*
+
+# ---------- 操作系统 / 编辑器杂物 ----------
+.DS_Store
+Thumbs.db
+desktop.ini
+ehthumbs.db
+$RECYCLE.BIN/
+*.swp
+*.swo
+.idea/
+.vscode/
+!.vscode/extensions.json
+
+# ---------- 机器身份 / 本地密钥（2026-10-12 整改 P0-3 追加，禁止入库） ----------
+# 本机硬件指纹（机器名/用户名/CPU/磁盘序列号/MAC/主板序列号），开源即泄露个人身份
+device_info.json
+*_device_info.json
+# 网关主密钥与本地库（即使 data/ 已覆盖，这里显式再钉一层，防目录规则被改动后失守）
+gateway/data/
+*.master_key
+.master_key
+
+# ---------- 外部版权素材（2026-10-12 追加） ----------
+# 碧蓝航线「宁海」Live2D 模型：前任代理抓取的外部游戏资源，非本项目设计资产。
+# 本地保留供 Live2D 管线测试，但开源仓库与任何发行物一律不收（R3.3-85 第7项）。
+desktop-pet-electron/assets/models/ninghai/
+
+# ---------- 2026-10-15 上传前补充（大体积/第三方/中间产物，禁止入库） ----------
+.venv-liveportrait/
+cherry-studio-src/
+cherry-studio.zip
+assets_pet_build/
+media_work/
+media_pipeline/
+tools/
+knowledge/
+*.zip
+*.7z
+*.rar
+
+# ---------- 2026-10-16 上传前隐私整改（禁止入库） ----------
+# 代理订阅配置：含节点地址/凭据，公开即泄露
+subscribe.json
+*subscribe*.json
+# 运行时配置（含本机设置/可能含 key）
+config.json
+# 各类备份副本
+*.bak[0-9]
+*.bak[0-9]*
+*.bak-*
+# 临时预览图
+assets_tmp_pet_preview.png
+# 根目录临时脚本与输出
+/_*.py
+/_*.txt
+/_*.log
+# 桌宠构建日志
+desktop-pet-electron/build_log*.txt
+desktop-pet-electron/live2d_console.txt
+desktop-pet-electron/pet_run_err.txt
+# e2e 产物
+docs/e2e_logs/

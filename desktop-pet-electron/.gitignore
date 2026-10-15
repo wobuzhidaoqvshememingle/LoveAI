@@ -1,0 +1,20 @@
+# 依赖
+node_modules/
+
+# 打包产物
+dist/
+out/
+
+# 日志
+*.log
+npm-debug.log*
+
+# 系统/编辑器
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp
+
+# 用户数据（不要把本地设置提交）
+.userdata/

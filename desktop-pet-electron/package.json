@@ -1,0 +1,65 @@
+{
+  "name": "loveai-desktop-pet",
+  "version": "3.1.0",
+  "description": "LoveAI-v2 系统精灵桌宠（关系分析助手，非恋爱对象）- Electron 透明桌面宠物（Live2D 立绘 + WebSocket 联动）",
+  "main": "electron/main.js",
+  "author": "LoveAI",
+  "license": "AGPL-3.0-only",
+  "scripts": {
+    "start": "electron electron/main.js",
+    "dev": "electron electron/main.js --dev",
+    "build": "electron-builder",
+    "build:win": "electron-builder --win"
+  },
+  "dependencies": {
+    "pixi.js": "^7.4.2",
+    "pixi-live2d-display": "^0.4.0"
+  },
+  "devDependencies": {
+    "electron": "^30.5.1",
+    "electron-builder": "^24.13.3"
+  },
+  "build": {
+    "appId": "com.loveai.desktoppet",
+    "productName": "LoveAIPet",
+    "directories": {
+      "output": "dist"
+    },
+    "asarUnpack": [
+      "digital-human/gpu-detect.ps1",
+      "digital-human/local/**",
+      "digital-human/cloud/**"
+    ],
+    "files": [
+      "electron/**/*",
+      "renderer/**/*",
+      "config/**/*",
+      "assets/**/*",
+      "digital-human/**/*",
+      "package.json",
+      "!assets/models/ninghai/**",
+      "!digital-human/local/LivePortrait/pretrained_weights/**",
+      "!digital-human/local/out/**",
+      "!digital-human/out/**",
+      "!**/*.bak",
+      "!**/*.bak_*",
+      "!**/*.bak2",
+      "!**/*.bak3"
+    ],
+    "win": {
+      "signAndEditExecutable": false,
+      "target": [
+        {
+          "target": "dir",
+          "arch": ["x64"]
+        }
+      ]
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "shortcutName": "LoveAI桌宠"
+    }
+  }
+}

@@ -1,0 +1,373 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>LoveAI - 恋爱助手</title>
+    <link rel="stylesheet" href="css/main.css">
+    <script src="qrc:///qtwebchannel/qwebchannel.js"></script>
+</head>
+<body>
+
+<div class="app-shell">
+
+    <!-- ============ 顶部栏 ============ -->
+    <header class="top-bar">
+        <div class="person-avatar" id="topAvatar">👤</div>
+        <div class="person-name" id="topPersonName">未选择对象</div>
+        <span class="badge relationship-badge" id="topStageBadge">初识</span>
+        <div class="affection-ring-wrap">
+            <canvas id="topAffectionRing" width="44" height="44"></canvas>
+        </div>
+        <div class="search-box">
+            <input type="text" id="globalSearch" placeholder="搜索对话 / 人物 / 任务...">
+        </div>
+        <button class="icon-btn" id="openSettingsBtn" title="设置">⚙</button>
+    </header>
+
+    <!-- ============ 左侧导航 ============ -->
+    <nav class="sidebar">
+        <div class="nav-item active" data-tab="dashboard">
+            <span class="nav-icon">📊</span><span>概览</span>
+        </div>
+        <div class="nav-item" data-tab="chat-analysis">
+            <span class="nav-icon">💬</span><span>聊天分析</span>
+        </div>
+        <div class="nav-item" data-tab="counseling">
+            <span class="nav-icon">💡</span><span>情感咨询</span>
+        </div>
+        <div class="nav-item" data-tab="profile">
+            <span class="nav-icon">📁</span><span>人物档案</span>
+        </div>
+        <div class="nav-item" data-tab="hero-wall">
+            <span class="nav-icon">🏆</span><span>英雄墙</span>
+        </div>
+        <div class="nav-item" data-tab="medal-wall">
+            <span class="nav-icon">🎖</span><span>勋章墙</span>
+        </div>
+        <div class="sidebar-footer">
+            <div class="nav-item" id="sidebarSettingsBtn">
+                <span class="nav-icon">⚙</span><span>设置</span>
+            </div>
+        </div>
+    </nav>
+
+    <!-- ============ 主内容区 ============ -->
+    <main class="main-content">
+
+        <!-- Tab: 概览 Dashboard -->
+        <section class="tab-pane active" id="tab-dashboard">
+            <div class="card">
+                <div class="card-title">今日概览</div>
+                <p class="placeholder-text">欢迎使用 LoveAI，在左侧选择功能开始吧。</p>
+            </div>
+            <div class="card">
+                <div class="card-title">最近任务</div>
+                <div id="dashboardTaskList"><p class="placeholder-text">暂无任务</p></div>
+            </div>
+        </section>
+
+        <!-- Tab: 聊天分析 -->
+        <section class="tab-pane" id="tab-chat-analysis">
+            <div class="card">
+                <div class="card-title">粘贴微信对话</div>
+                <textarea class="chat-input-area" id="chatInput" placeholder="将微信聊天记录粘贴到这里..."></textarea>
+                <button class="btn-primary" id="analyzeBtn">开始分析</button>
+            </div>
+
+            <div class="card">
+                <div class="card-title">分析结果</div>
+                <div id="analysisResult">
+                    <p class="placeholder-text">等待分析...</p>
+                </div>
+            </div>
+        </section>
+
+        <!-- Tab: 情感咨询 -->
+        <section class="tab-pane" id="tab-counseling">
+            <div class="card">
+                <div class="card-title">
+                    咨询模式
+                    <div>
+                        <button class="btn-secondary counseling-mode active" data-mode="self">自我成长</button>
+                        <button class="btn-secondary counseling-mode" data-mode="partner">对象视角</button>
+                    </div>
+                </div>
+                <div id="counselingDialog" style="max-height:400px;overflow-y:auto;margin-bottom:12px;">
+                    <p class="placeholder-text">输入你的情感问题，AI 为你分析。</p>
+                </div>
+                <textarea id="counselingInput" placeholder="说说你的困惑..."></textarea>
+                <button class="btn-primary" id="counselingSendBtn" style="margin-top:8px;">发送咨询</button>
+            </div>
+        </section>
+
+        <!-- Tab: 人物档案 -->
+        <section class="tab-pane" id="tab-profile">
+            <div class="card">
+                <div class="card-title">基本信息</div>
+                <div class="setting-row">
+                    <span class="setting-label">昵称</span>
+                    <input type="text" id="profileName" placeholder="对方昵称">
+                </div>
+                <div class="setting-row">
+                    <span class="setting-label">性别</span>
+                    <select id="profileGender">
+                        <option value="female">女</option>
+                        <option value="male">男</option>
+                    </select>
+                </div>
+                <div class="setting-row">
+                    <span class="setting-label">备注</span>
+                    <input type="text" id="profileNote" placeholder="关系备注">
+                </div>
+            </div>
+
+            <div class="card">
+                <div class="card-title">18 维好感度雷达图</div>
+                <div class="radar-chart"><canvas id="radarChartCanvas"></canvas></div>
+            </div>
+
+            <div class="card">
+                <div class="card-title">心理学侧写 (SOUL.md)</div>
+                <textarea id="soulEditor" style="width:100%;min-height:200px;" placeholder="心理学侧写..."></textarea>
+            </div>
+
+            <div class="card">
+                <div class="card-title">喜恶清单</div>
+                <div id="preferenceList"><p class="placeholder-text">暂无记录</p></div>
+            </div>
+        </section>
+
+        <!-- Tab: 英雄墙 -->
+        <section class="tab-pane" id="tab-hero-wall">
+            <div class="card">
+                <div class="card-title">英雄墙（按好感度排序）</div>
+                <div class="hero-grid" id="heroGrid">
+                    <p class="placeholder-text">暂无人物</p>
+                </div>
+            </div>
+        </section>
+
+        <!-- Tab: 勋章墙 -->
+        <section class="tab-pane" id="tab-medal-wall">
+            <div class="card">
+                <div class="card-title">
+                    勋章墙
+                    <select id="medalFilter">
+                        <option value="all">全部</option>
+                        <option value="unlocked">已获得</option>
+                        <option value="locked">未获得</option>
+                    </select>
+                </div>
+                <div class="medal-grid" id="medalGrid">
+                    <p class="placeholder-text">加载中...</p>
+                </div>
+            </div>
+        </section>
+
+    </main>
+
+    <!-- ============ 右侧面板 ============ -->
+    <aside class="right-panel" id="rightPanel">
+        <div class="panel-section collapsible" id="taskPanel">
+            <h4 id="taskPanelToggle">📋 任务面板 ▾</h4>
+            <div class="panel-body" id="taskList">
+                <p class="placeholder-text">暂无任务</p>
+            </div>
+        </div>
+        <div class="panel-section collapsible" id="memoPanel">
+            <h4 id="memoPanelToggle">📝 备忘录（喜恶）▾</h4>
+            <div class="panel-body" id="memoList">
+                <p class="placeholder-text">暂无记录</p>
+            </div>
+        </div>
+        <button class="btn-ghost" id="collapsePanelBtn" style="width:100%;">收起面板 «</button>
+    </aside>
+
+    <!-- ============ 底部栏 ============ -->
+    <footer class="bottom-bar">
+        <span class="stat-item">等级 <span class="stat-value" id="statLevel">Lv.1</span></span>
+        <span class="stat-item">金币 <span class="stat-value" id="statCoins">0</span></span>
+        <span class="stat-item">勋章 <span class="stat-value" id="statMedals">0/25</span></span>
+        <div class="bottom-right">
+            <button class="btn-ghost" id="openDataStatsBtn">数据统计</button>
+            <button class="btn-ghost" id="bottomSettingsBtn">设置</button>
+        </div>
+    </footer>
+</div>
+
+<!-- ============ 设置中心模态框 ============ -->
+<div class="modal" id="settingsModal">
+    <div class="modal-content">
+        <div class="modal-header">
+            <h2>设置中心</h2>
+            <button class="icon-btn" data-close-modal="settingsModal">✕</button>
+        </div>
+
+        <div class="settings-group">
+            <h3>大模型</h3>
+            <div class="setting-row">
+                <span class="setting-label">API Key</span>
+                <input type="password" data-config="llm.api_key" placeholder="sk-...">
+            </div>
+            <div class="setting-row">
+                <span class="setting-label">Base URL</span>
+                <input type="text" data-config="llm.base_url" placeholder="https://api.openai.com/v1">
+            </div>
+            <div class="setting-row">
+                <span class="setting-label">模型名称</span>
+                <input type="text" data-config="llm.model" placeholder="gpt-4o-mini">
+            </div>
+            <div class="setting-row">
+                <span class="setting-label">温度 (temperature)</span>
+                <input type="number" step="0.1" min="0" max="2" data-config="llm.temperature">
+            </div>
+        </div>
+
+        <div class="settings-group">
+            <h3>模型路由</h3>
+            <div class="setting-row">
+                <span class="setting-label">聊天分析模型</span>
+                <input type="text" data-config="router.analysis_model">
+            </div>
+            <div class="setting-row">
+                <span class="setting-label">咨询模型</span>
+                <input type="text" data-config="router.counseling_model">
+            </div>
+            <div class="setting-row">
+                <span class="setting-label">代聊模型</span>
+                <input type="text" data-config="router.chat_model">
+            </div>
+        </div>
+
+        <div class="settings-group">
+            <h3>监听</h3>
+            <div class="setting-row">
+                <span class="setting-label">启用微信监听</span>
+                <div class="switch-toggle" data-config="listen.enabled"></div>
+            </div>
+            <div class="setting-row">
+                <span class="setting-label">监听间隔 (秒)</span>
+                <input type="number" data-config="listen.interval" min="1">
+            </div>
+        </div>
+
+        <div class="settings-group">
+            <h3>桌宠 / 悬浮球</h3>
+            <div class="setting-row">
+                <span class="setting-label">显示桌宠</span>
+                <div class="switch-toggle" data-config="pet.enabled"></div>
+            </div>
+            <div class="setting-row">
+                <span class="setting-label">显示悬浮球</span>
+                <div class="switch-toggle" data-config="floatball.enabled"></div>
+            </div>
+            <div class="setting-row">
+                <span class="setting-label">桌宠透明度</span>
+                <input type="number" step="0.05" min="0.2" max="1" data-config="pet.opacity">
+            </div>
+        </div>
+
+        <div class="settings-group">
+            <h3>语音</h3>
+            <div class="setting-row">
+                <span class="setting-label">启用语音播报</span>
+                <div class="switch-toggle" data-config="voice.enabled"></div>
+            </div>
+            <div class="setting-row">
+                <span class="setting-label">播报音色</span>
+                <select data-config="voice.voice">
+                    <option value="female">女声</option>
+                    <option value="male">男声</option>
+                </select>
+            </div>
+        </div>
+
+        <div class="settings-group">
+            <h3>回复</h3>
+            <div class="setting-row">
+                <span class="setting-label">自动回复</span>
+                <div class="switch-toggle" data-config="reply.auto"></div>
+            </div>
+            <div class="setting-row">
+                <span class="setting-label">回复条数</span>
+                <input type="number" data-config="reply.count" min="1" max="10">
+            </div>
+        </div>
+
+        <div class="settings-group">
+            <h3>隐私</h3>
+            <div class="setting-row">
+                <span class="setting-label">本地加密存储</span>
+                <div class="switch-toggle" data-config="privacy.encrypt"></div>
+            </div>
+        </div>
+
+        <div class="settings-group">
+            <h3>通知</h3>
+            <div class="setting-row">
+                <span class="setting-label">新消息桌面通知</span>
+                <div class="switch-toggle" data-config="notify.desktop"></div>
+            </div>
+            <div class="setting-row">
+                <span class="setting-label">音效提醒</span>
+                <div class="switch-toggle" data-config="notify.sound"></div>
+            </div>
+        </div>
+
+        <div class="settings-group">
+            <h3>数据</h3>
+            <div class="setting-row">
+                <button class="btn-secondary" id="exportDataBtn">导出数据</button>
+                <button class="btn-secondary" id="importDataBtn">导入数据</button>
+                <button class="btn-secondary" id="resetDataBtn">清空数据</button>
+            </div>
+        </div>
+
+        <div class="settings-group">
+            <h3>快捷键</h3>
+            <div class="setting-row">
+                <span class="setting-label">呼出主窗口</span>
+                <input type="text" data-config="hotkey.open_window" placeholder="Ctrl+Shift+L">
+            </div>
+        </div>
+
+        <div class="settings-group">
+            <h3>界面</h3>
+            <div class="setting-row">
+                <span class="setting-label">亮色主题</span>
+                <div class="switch-toggle" data-config="ui.light_theme" id="lightThemeToggle"></div>
+            </div>
+        </div>
+
+        <div class="settings-group">
+            <h3>其他</h3>
+            <div class="setting-row">
+                <span class="setting-label">开机自启动</span>
+                <div class="switch-toggle" data-config="other.autostart"></div>
+            </div>
+        </div>
+
+        <div style="text-align:right;">
+            <button class="btn-primary" id="saveSettingsBtn">保存全部</button>
+        </div>
+    </div>
+</div>
+
+<!-- ============ 新手引导 ============ -->
+<div class="onboarding-overlay" id="onboardingOverlay">
+    <div class="onboarding-card">
+        <h2>欢迎使用 LoveAI ❤</h2>
+        <p>这是一款恋爱辅助桌面应用，帮你分析聊天、提升好感度。</p>
+        <p style="color:var(--gold-primary)">第一步：请先在「设置 → 大模型」中配置你的 LLM API Key。</p>
+        <button class="btn-primary" id="onboardingNextBtn">开始使用</button>
+    </div>
+</div>
+
+<!-- ============ 弹幕层 ============ -->
+<div class="danmaku-layer" id="danmakuLayer"></div>
+
+<script src="js/bridge.js"></script>
+<script src="js/app.js"></script>
+</body>
+</html>

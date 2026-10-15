@@ -1,0 +1,151 @@
+<!DOCTYPE html>
+<html lang="zh-CN"><head><meta charset="utf-8">
+<style>
+* { margin:0; padding:0; box-sizing:border-box; }
+body { background:#0b0d13; color:#e0e0e0; font-family:-apple-system,"Segoe UI","Microsoft YaHei",sans-serif; padding:24px; }
+.wrap { max-width:640px; margin:0 auto; }
+.title-sub { color:#e879a8; font-size:13px; letter-spacing:3px; margin-bottom:4px; }
+.title-main { font-size:32px; font-weight:700; margin-bottom:20px; }
+.card { background:#151821; border:1px solid #232735; border-radius:14px; padding:18px 20px; margin-bottom:16px; }
+.card-label { color:#6ba3ff; font-size:12px; letter-spacing:2px; margin-bottom:12px; }
+.row { display:flex; justify-content:space-between; align-items:center; margin-bottom:8px; }
+.tag { display:inline-block; padding:3px 12px; border-radius:20px; font-size:12px; border:1px solid; }
+.platform { color:#aaa; font-size:14px; }
+.hearts { font-size:18px; letter-spacing:2px; }
+.heart { color:#333; } .heart.on { color:#ff5a7a; }
+.stars { font-size:16px; letter-spacing:1px; }
+.star { color:#333; } .star.on { color:#f5c542; }
+.score-num { color:#e879a8; font-size:20px; font-weight:600; }
+.chart { margin-top:8px; }
+.chart-empty text { font-size:13px; }
+.strategy-name { font-size:20px; font-weight:600; margin-bottom:4px; }
+.strategy-start { color:#888; font-size:13px; margin-bottom:8px; }
+.strategy-basis { color:#bbb; font-size:13px; line-height:1.6; }
+.baseline-row { display:flex; align-items:center; gap:10px; padding:8px 0; border-bottom:1px solid #1f2330; }
+.baseline-row:last-child { border-bottom:none; }
+.baseline-date { color:#888; font-size:12px; width:80px; flex-shrink:0; }
+.baseline-tag { padding:2px 8px; border-radius:10px; font-size:11px; border:1px solid; flex-shrink:0; }
+.baseline-text { flex:1; font-size:12px; color:#bbb; line-height:1.4; }
+.baseline-bar { width:80px; height:6px; background:#232735; border-radius:3px; flex-shrink:0; overflow:hidden; }
+.baseline-fill { height:100%; background:linear-gradient(90deg,#6ba3ff,#e879a8); border-radius:3px; }
+.baseline-score { color:#aaa; font-size:12px; width:48px; text-align:right; flex-shrink:0; }
+.recent-row { display:flex; align-items:center; gap:8px; padding:6px 0; border-bottom:1px solid #1f2330; font-size:13px; }
+.recent-row:last-child { border-bottom:none; }
+.recent-who { width:36px; font-weight:600; flex-shrink:0; }
+.recent-content { flex:1; color:#ccc; }
+.recent-time { color:#666; font-size:11px; flex-shrink:0; }
+.risk-row { display:flex; align-items:center; gap:10px; padding:6px 0; font-size:13px; }
+.risk-level { padding:2px 10px; border-radius:10px; font-size:11px; border:1px solid; flex-shrink:0; }
+.risk-type { color:#ddd; font-weight:600; width:100px; flex-shrink:0; }
+.risk-signal { color:#999; font-size:12px; flex:1; }
+.summary-box { color:#aaa; font-size:13px; line-height:1.7; margin-top:8px; }
+.meta { color:#666; font-size:12px; margin-top:12px; }
+</style></head><body><div class="wrap">
+<div class="title-sub">CHARACTER FILE</div>
+<div class="title-main">路线详情</div>
+
+<div class="card">
+  <div class="row">
+    <span class="platform">微信 · ACTIVE</span>
+    <span class="tag" style="color:#e879a8;border-color:#e879a8;background:#e879a815">长期关系</span>
+  </div>
+  <div class="row" style="margin-top:10px;">
+    <span>好感度</span>
+    <span><span class="hearts"><span class="heart on">♥</span><span class="heart on">♥</span><span class="heart on">♥</span><span class="heart on">♥</span><span class="heart on">♥</span><span class="heart on">♥</span><span class="heart on">♥</span><span class="heart ">♥</span><span class="heart ">♥</span><span class="heart ">♥</span></span> <span class="score-num">68</span>/100</span>
+  </div>
+  <div class="row">
+    <span>我的评分</span>
+    <span><span class="stars"><span class="star on">★</span><span class="star on">★</span><span class="star on">★</span><span class="star on">★</span><span class="star on">★</span><span class="star on">★</span><span class="star on">★</span><span class="star ">★</span><span class="star ">★</span><span class="star ">★</span></span> <span class="score-num" style="color:#f5c542">7</span>/10</span>
+  </div>
+  <div class="chart"><svg width="560" height="120" viewBox="0 0 560 120"><polygon points="20,100 20.0,58.4 94.3,51.2 168.6,69.6 242.9,64.0 317.1,53.6 391.4,42.4 465.7,37.6 540.0,35.2 540,100" fill="url(#grad)" opacity="0.25"/><polyline points="20.0,58.4 94.3,51.2 168.6,69.6 242.9,64.0 317.1,53.6 391.4,42.4 465.7,37.6 540.0,35.2" fill="none" stroke="#e879a8" stroke-width="2"/><circle cx="20.0" cy="58.4" r="3.5" fill="#e879a8"/><circle cx="94.3" cy="51.2" r="3.5" fill="#e879a8"/><circle cx="168.6" cy="69.6" r="3.5" fill="#e879a8"/><circle cx="242.9" cy="64.0" r="3.5" fill="#e879a8"/><circle cx="317.1" cy="53.6" r="3.5" fill="#e879a8"/><circle cx="391.4" cy="42.4" r="3.5" fill="#e879a8"/><circle cx="465.7" cy="37.6" r="3.5" fill="#e879a8"/><circle cx="540.0" cy="35.2" r="3.5" fill="#e879a8"/><text x="20.0" y="116" text-anchor="middle" fill="#666" font-size="10">10-01</text><text x="94.3" y="116" text-anchor="middle" fill="#666" font-size="10">10-02</text><text x="168.6" y="116" text-anchor="middle" fill="#666" font-size="10">10-03</text><text x="242.9" y="116" text-anchor="middle" fill="#666" font-size="10">10-04</text><text x="317.1" y="116" text-anchor="middle" fill="#666" font-size="10">10-05</text><text x="391.4" y="116" text-anchor="middle" fill="#666" font-size="10">10-06</text><text x="465.7" y="116" text-anchor="middle" fill="#666" font-size="10">10-07</text><text x="540.0" y="116" text-anchor="middle" fill="#666" font-size="10">10-08</text><defs><linearGradient id="grad" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="#e879a8"/><stop offset="100%" stop-color="#e879a8" stop-opacity="0"/></linearGradient></defs></svg></div>
+  <div style="color:#666;font-size:12px;margin-top:4px;">10-01 → 10-08 · 近8次互动情绪走势</div>
+</div>
+
+<div class="card">
+  <div class="card-label">CURRENT STRATEGY</div>
+  <div class="strategy-name">维持张力</div>
+  <div class="strategy-start">起始：2026-10-08</div>
+  <div class="strategy-basis">依据：约会后情绪升温，对方主动表达开心。当前应维持暧昧张力，不过度推进，用间歇性强化保持对方投入。</div>
+</div>
+
+<div class="card">
+  <div class="card-label">EMOTION BASELINE</div>
+  
+            <div class="baseline-row">
+                <div class="baseline-date">10-05</div>
+                <span class="baseline-tag" style="background:#f0a04022;color:#f0a040;border-color:#f0a040">平稳</span>
+                <div class="baseline-text">主动找话题，关系回暖</div>
+                <div class="baseline-bar"><div class="baseline-fill" style="width:58.0%"></div></div>
+                <div class="baseline-score">5.8/10</div>
+            </div>
+            <div class="baseline-row">
+                <div class="baseline-date">10-06</div>
+                <span class="baseline-tag" style="background:#6bc5a822;color:#6bc5a8;border-color:#6bc5a8">升温</span>
+                <div class="baseline-text">约会成功，开心且主动</div>
+                <div class="baseline-bar"><div class="baseline-fill" style="width:72.0%"></div></div>
+                <div class="baseline-score">7.2/10</div>
+            </div>
+            <div class="baseline-row">
+                <div class="baseline-date">10-07</div>
+                <span class="baseline-tag" style="background:#6bc5a822;color:#6bc5a8;border-color:#6bc5a8">升温</span>
+                <div class="baseline-text">约会后表达感谢，暧昧升温</div>
+                <div class="baseline-bar"><div class="baseline-fill" style="width:78.0%"></div></div>
+                <div class="baseline-score">7.8/10</div>
+            </div>
+            <div class="baseline-row">
+                <div class="baseline-date">10-08</div>
+                <span class="baseline-tag" style="background:#6bc5a822;color:#6bc5a8;border-color:#6bc5a8">升温</span>
+                <div class="baseline-text">主动说心情好，情绪高位</div>
+                <div class="baseline-bar"><div class="baseline-fill" style="width:81.0%"></div></div>
+                <div class="baseline-score">8.1/10</div>
+            </div>
+</div>
+
+<div class="card">
+  <div class="card-label">RECENT INTERACTION</div>
+  
+        <div class="recent-row">
+            <span class="recent-who" style="color:#e879a8">我</span>
+            <span class="recent-content">到家了吗</span>
+            <span class="recent-time">10-07T21:00</span>
+        </div>
+        <div class="recent-row">
+            <span class="recent-who" style="color:#6ba3ff">对方</span>
+            <span class="recent-content">到了 今天真的很开心 谢谢你</span>
+            <span class="recent-time">10-07T21:15</span>
+        </div>
+        <div class="recent-row">
+            <span class="recent-who" style="color:#e879a8">我</span>
+            <span class="recent-content">跟你在一起我也开心</span>
+            <span class="recent-time">10-07T21:16</span>
+        </div>
+        <div class="recent-row">
+            <span class="recent-who" style="color:#6ba3ff">对方</span>
+            <span class="recent-content">嘿嘿 晚安</span>
+            <span class="recent-time">10-07T21:20</span>
+        </div>
+        <div class="recent-row">
+            <span class="recent-who" style="color:#e879a8">我</span>
+            <span class="recent-content">早</span>
+            <span class="recent-time">10-08T08:00</span>
+        </div>
+        <div class="recent-row">
+            <span class="recent-who" style="color:#6ba3ff">对方</span>
+            <span class="recent-content">早~ 今天心情好好</span>
+            <span class="recent-time">10-08T08:30</span>
+        </div>
+</div>
+
+<div class="card">
+  <div class="card-label">RISK SIGNALS · 危险信号归档</div>
+  
+        <div class="risk-row">
+            <span class="risk-level" style="background:#f0a04022;color:#f0a040;border-color:#f0a040">中</span>
+            <span class="risk-type">情感连接风险</span>
+            <span class="risk-signal">情感投标转向率仅0.0%（Gottman健康线80%），对方分享常被敷衍或忽略</span>
+        </div>
+  <div class="summary-box">对方呈现安全型依恋特征，沟通模式为冷战倾向。 当前处于长期关系，关系稳定但可能进入平淡期，需要主动制造新鲜感。 情绪模式消极倾向，投入程度为中高投入。 关系满意度62.8分（中等满意度）。 承诺度51.1分（低承诺）。 积极/消极互动比7.0:1（健康（≥5:1））。 冲突1次，修复率0.0%（修复能力弱）。 主要爱的语言是精心时刻。对方最在意陪伴质量，放下手机专心陪她，定期安排专属约会时间 权力格局：我方略占优。保持当前节奏，偶尔让对方做决定，增加她的参与感 情感账户透支边缘（余额-1）。 冲突处理模式：冷战逃避。 个人边界中等，异性边界社交简单。 新鲜感：倦怠（0.5分）。 激情激情偏低（</div>
+  <div class="meta">消息总数 36（对方 19 / 我 17）· 依恋类型 安全型</div>
+</div>
+
+</div></body></html>

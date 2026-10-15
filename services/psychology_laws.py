@@ -1,0 +1,1831 @@
+# -*- coding: utf-8 -*-
+"""
+LoveAI v2.0 - 恋爱/人际关系心理学定律注册表（策略化数据层）
+
+设计原则（默认修复引导导向 + 手段中立呈现）：
+  1. 定律是"理解关系机制 + 引导健康互动"的工具；默认产品主线仍为修复引导；
+  2. 对容易被误用为操控的定律（间歇性强化/稀缺/登门槛/吊桥/低球……），
+     策略表述一律同时呈现"识别对方是否在用这个机制影响你 / 健康营造氛围"，
+     并如实列出反向使用的代价；不替用户做道德裁决，判断权交给用户；
+  3. 所有匹配数据驱动：每条定律自带 match(dims, persona, stage) 谓词，
+     StrategyAdvisor / TaskEngine 只负责调用，不在业务代码里硬编码 if；
+  4. 与 StrategyAdvisor._extract_dimensions 产出的 dims 对齐：
+     attachment/conflict/love/boundary/differentiation/emotion_stability/
+     trust_level/behavior_inconsistent。
+
+学术来源：见 knowledge/disciplines/psychology/laws_of_psychology.md。
+"""
+from __future__ import annotations
+
+import logging
+from typing import Any, Callable, Optional
+
+logger = logging.getLogger(__name__)
+
+
+# ====================================================================== #
+# 轻量维度提取（独立使用时无需 StrategyAdvisor）
+# ====================================================================== #
+def _get(d: Any, *keys: str, default: Any = None) -> Any:
+    """嵌套 dict 安全取值。"""
+    cur = d
+    for k in keys:
+        if isinstance(cur, dict):
+            cur = cur.get(k)
+        else:
+            return default
+        if cur is None:
+            return default
+    return cur
+
+
+def _lightweight_dims(persona: dict) -> dict:
+    """从画像中提取定律匹配所需的关键维度（与 StrategyAdvisor 的桶对齐）。
+
+    支持两种形态：
+      - 真实 21 维嵌套画像：attachment.primary_type / risk_warning.pua_score ...
+      - 扁平测试画像：attachment="anxious" / pua_score=6 ...
+    """
+    persona = persona or {}
+
+    def _norm_attachment(att: Any) -> str:
+        if isinstance(att, dict):
+            # 三维评分优先（与 StrategyAdvisor._attachment_bucket_from_scores 对齐）
+            try:
+                a = float(att.get("avoidance_score", -1))
+                x = float(att.get("anxiety_score", -1))
+                if a >= 0 and x >= 0:
+                    if a >= 60 and x < 40:
+                        return "avoidant"
+                    if x >= 60 and a < 40:
+                        return "anxious"
+                    if a >= 60 and x >= 60:
+                        return "fearful"
+                    if a < 40 and x < 40:
+                        return "secure"
+                    return "avoidant" if a >= x else "anxious"
+            except (TypeError, ValueError):
+                pass
+            att = att.get("primary_type") or att.get("type") or ""
+        s = str(att or "")
+        if "回避" in s or "avoidant" in s:
+            return "avoidant"
+        if "焦虑" in s or "anxious" in s:
+            return "anxious"
+        if "恐惧" in s or "fearful" in s or "混乱" in s or "disorganized" in s:
+            return "fearful"
+        return "secure"
+
+    att_raw = persona.get("attachment")
+    attachment = _norm_attachment(att_raw)
+
+    cf_raw = persona.get("conflict_style") or {}
+    conflict = ""
+    if isinstance(cf_raw, dict):
+        conflict = str(cf_raw.get("primary_key") or cf_raw.get("primary") or "")
+    else:
+        conflict = str(cf_raw or "")
+    if "cold_war" in conflict or "avoiding" in conflict or "逃避" in conflict or "冷战" in conflict:
+        conflict = "avoiding"
+    elif "destructive" in conflict or "outburst" in conflict or "competing" in conflict or "爆发" in conflict or "攻击" in conflict:
+        conflict = "competing"
+    elif "compromising" in conflict or "妥协" in conflict:
+        conflict = "compromising"
+    else:
+        conflict = "collaborating"
+
+    emo = persona.get("emotion_pattern") or {}
+    es_raw = persona.get("emotional_stability")
+    emotion_stability = "high"
+    if es_raw is not None:
+        s = str(es_raw)
+        emotion_stability = "low" if any(k in s for k in ("低", "unstable", "不稳定", "神经质")) else (
+            "medium" if any(k in s for k in ("中",)) else "high")
+    elif isinstance(emo, dict):
+        vol = str(emo.get("volatility", ""))
+        emotion_stability = {"高": "low", "低": "high"}.get(vol, "medium")
+
+    rw = persona.get("risk_warning") or {}
+    try:
+        pua_score = float(rw.get("pua_score", 0) or 0)
+    except (TypeError, ValueError):
+        pua_score = 0.0
+
+    psych = persona.get("psychology") or {}
+    dark = psych.get("dark_triad_tendencies") or {}
+    narc = float(dark.get("自恋", dark.get("narcissism", 0)) or 0)
+    manip = float(dark.get("操纵", dark.get("manipulation", 0)) or 0)
+
+    dec = persona.get("deception_risk") or {}
+    dec_score = 0
+    dec_data_sufficient = bool(dec.get("data_sufficient", False)) if isinstance(dec, dict) else False
+    if isinstance(dec, dict):
+        try:
+            dec_score = float(dec.get("risk_score", 0) or 0)
+        except (TypeError, ValueError):
+            dec_score = 0.0
+
+    inv = persona.get("investment_balance") or {}
+    inv_status = str(inv.get("status", "")).lower() if isinstance(inv, dict) else ""
+    try:
+        inv_ratio = float(inv.get("overall_ratio", 1.0)) if isinstance(inv, dict) else 1.0
+    except (TypeError, ValueError):
+        inv_ratio = 1.0
+
+    tw = persona.get("trustworthiness") or {}
+    trust_level = tw.get("level") if isinstance(tw, dict) else None
+
+    uw = persona.get("unwarranted_attention") or {}
+    uw_detected = bool(isinstance(uw, dict) and uw.get("detected"))
+
+    return {
+        "attachment": attachment,
+        "conflict": conflict,
+        "emotion_stability": emotion_stability,
+        "pua_score": pua_score,
+        "narcissism": narc,
+        "manipulation": manip,
+        "npd_triggered": pua_score >= 5 or (narc >= 2 and manip >= 1),
+        "deception_score": dec_score,
+        "deception_high": dec_data_sufficient and dec_score >= 60,
+        "invest_user_over": inv_status == "user_overinvest" or inv_ratio > 1.3,
+        "trust_level": trust_level,
+        "unwarranted": uw_detected,
+        "raw": {
+            "attachment": str(_get(att_raw, "primary_type", default=att_raw or "") or "未标注"),
+        },
+    }
+
+
+# ====================================================================== #
+# 定律注册表
+# 每条字段：
+#   id/name/category/definition/scenario/strategy/taboo/persona_effectiveness
+#   rec_tips   : 修复引导导向的健康做法（注入 StrategyAdvisor.recommended）
+#   forb_tips  : 误用警告（注入 StrategyAdvisor.forbidden）
+#   tasks      : 对应 TaskEngine 任务标题（已写好"基于XX定律"说明）
+#   match      : (dims, persona, stage) -> bool，数据驱动触发
+# ====================================================================== #
+def _m(stage_le: Optional[int] = None, stage_in: Optional[tuple] = None,
+       attach_in: Optional[tuple] = None, conflict_in: Optional[tuple] = None,
+       es_in: Optional[tuple] = None, npd: bool = False,
+       deception_high: bool = False, invest_over: bool = False,
+       unwarranted: bool = False, always: bool = False) -> Callable[[dict, dict, int], bool]:
+    """生成一个声明式匹配谓词（所有条件 AND）。"""
+    def _pred(dims: dict, persona: dict, stage: int) -> bool:
+        if always:
+            return True
+        if stage_le is not None and not (stage <= stage_le):
+            return False
+        if stage_in is not None and stage not in stage_in:
+            return False
+        if attach_in is not None and dims.get("attachment") not in attach_in:
+            return False
+        if conflict_in is not None and dims.get("conflict") not in conflict_in:
+            return False
+        if es_in is not None and dims.get("emotion_stability") not in es_in:
+            return False
+        if npd and not dims.get("npd_triggered"):
+            return False
+        if deception_high and not dims.get("deception_high"):
+            return False
+        if invest_over and not dims.get("invest_user_over"):
+            return False
+        if unwarranted and not dims.get("unwarranted"):
+            return False
+        return True
+    _pred.__doc__ = f"match(stage_le={stage_le}, stage_in={stage_in}, attach_in={attach_in}, npd={npd}, deception_high={deception_high}, invest_over={invest_over})"
+    return _pred
+
+
+# ---------------------------------------------------------------------- #
+# 39 条定律
+# ---------------------------------------------------------------------- #
+LAWS: list[dict[str, Any]] = [
+    # ===================== 基础认知类 ===================== #
+    {
+        "id": "primacy_effect",
+        "name": "首因效应",
+        "category": "基础认知",
+        "definition": "第一次接触形成的印象最牢固，后续信息都会被这个印象同化。",
+        "scenario": "初识期（stage≤2）的第一次聊天、第一次约会。",
+        "strategy": "第一次互动前调整状态：开场不急躁、不暴露需求感、不连环追问；用一次舒适的开场奠定‘相处不累’的基调。",
+        "taboo": "别靠伪装人设刷第一印象——首因印象越完美，后期暴露真实状态时反弹越狠（恶魔效应）。",
+        "persona_effectiveness": "对所有依恋类型都生效；对安全型尤其重要，他们会把首次印象直接作为长期基准。",
+        "rec_tips": ["整理首次互动的开场状态"],
+        "forb_tips": [],
+        "tasks": ["复盘最近一次开场：是否在初识期留下了舒适、不施压的第一印象（基于首因效应）"],
+        "match": _m(stage_le=2),
+    },
+    {
+        "id": "recency_effect",
+        "name": "近因效应",
+        "category": "基础认知",
+        "definition": "最近一次互动的体验，会主导对方对这段关系当下的整体评价。",
+        "scenario": "矛盾/修复期（stage 3-5）——刚吵完架后的最后一次对话，决定对方记住的是温暖还是冰冷。",
+        "strategy": "冲突后不要以甩门/冷战结束对话；哪怕没谈拢，收尾也要留一句温和的话（‘今天先到这，你先休息，明天我们再聊’）。",
+        "taboo": "不要把‘先放狠话再说’当成策略——狠话就是近因，对方记住的就是狠话。",
+        "persona_effectiveness": "对焦虑型、情绪稳定性低者效果最强；对安全型相对弱但仍有效。",
+        "rec_tips": ["冲突收尾留温和句"],
+        "forb_tips": ["以狠话收尾"],
+        "tasks": ["下次有分歧时，练习在对话结束前留一句不带情绪的温和收尾（基于近因效应）"],
+        "match": _m(stage_in=(3, 4, 5)),
+    },
+    {
+        "id": "halo_effect",
+        "name": "晕轮效应",
+        "category": "基础认知",
+        "definition": "一个突出优点会泛化为对整个人的正面评价（一好百好）。",
+        "scenario": "初识到暧昧期（stage≤5）——对方因为你一个闪光点而整体加分。",
+        "strategy": "找到自己一个真实、稳定的亮点（靠谱/有趣/情绪稳）并自然展现；让这个亮点替你加分，而不是面面俱到地表演。",
+        "taboo": "不要用一个优点掩盖本质问题（如用‘我很有钱’掩盖不尊重人）——光环会破。",
+        "persona_effectiveness": "对焦虑型、安全型都有效；对高怀疑/高欺骗画像无效（他们会主动拆光环）。",
+        "rec_tips": ["自然展现一个真实亮点"],
+        "forb_tips": [],
+        "tasks": ["写下自己一个真实稳定的优点，本周在自然场景中展现一次（基于晕轮效应）"],
+        "match": _m(stage_le=5),
+    },
+    {
+        "id": "horn_effect",
+        "name": "恶魔效应",
+        "category": "基础认知",
+        "definition": "一次严重失信/失控会泛化为对整个人的负面评价（一坏百坏）。",
+        "scenario": "可信度偏低或刚失信之后——一次失约会让对方之前所有好感打折。",
+        "strategy": "关系初期小承诺必兑现；已经失信后，不要急着辩解，用连续3次小兑现重建可信基线。",
+        "taboo": "失信后立刻送大礼补过=再次透支；对方需要的是一致，不是补偿性表演。",
+        "persona_effectiveness": "对回避型、高边界者尤其致命（他们本来就在观察你是否稳定）。",
+        "rec_tips": ["小承诺连续兑现重建信任基线"],
+        "forb_tips": ["失信后立刻大礼补偿"],
+        "tasks": ["列出最近3个你答应过但没兑现的小承诺，本周逐一兑现并温和说明（基于恶魔效应）"],
+        "match": _m(deception_high=True),
+    },
+    {
+        "id": "stereotype",
+        "name": "刻板印象",
+        "category": "基础认知",
+        "definition": "用群体标签代替对个体的真实观察，导致误判。",
+        "scenario": "所有阶段——尤其初识期容易把‘程序员/女生/某星座’直接当成对方。",
+        "strategy": "把对方当作具体的人观察：记录TA真实说过的话、做过的事，而不是套用标签；也留意自己是否在用标签judge对方。",
+        "taboo": "不要在对话中暴露刻板印象式评价（‘你们XX不都这样吗’），会直接触发被贬低感。",
+        "persona_effectiveness": "对高自我分化者冒犯最大；对安全型也会引发反感。",
+        "rec_tips": ["用具体行为记录代替标签判断"],
+        "forb_tips": [],
+        "tasks": ["写下3条对方‘与刻板印象不符’的真实细节，作为你了解TA的起点（基于刻板印象原理）"],
+        "match": _m(stage_le=3),
+    },
+    {
+        "id": "pygmalion_effect",
+        "name": "自我实现预言（皮格马利翁效应）",
+        "category": "基础认知",
+        "definition": "你预期对方会怎样，对方就越容易变成那样；负面预期会把人推走。",
+        "scenario": "焦虑型画像——总预期‘TA会离开我’，于是查岗/追问，真的把对方逼走。",
+        "strategy": "有意识地选择叙事：把‘TA不回我=不爱我’改写为‘TA在忙，晚点会说’；用信任的语气提问，而不是质问。",
+        "taboo": "不要把‘我就知道你会这样’挂在嘴边——这是在亲手预言坏结果。",
+        "persona_effectiveness": "对焦虑型最相关（他们是自我实现预言的高发人群）；对回避型的负面预期也会逼出回避。",
+        "rec_tips": ["用信任语气代替质问语气"],
+        "forb_tips": ["说‘我就知道你会这样’式预判"],
+        "tasks": ["记录本周3次你‘预期对方会冷落你’的瞬间，事后对照真实结果，校准你的预言（基于自我实现预言）"],
+        "match": _m(attach_in=("anxious",)),
+    },
+
+    # ===================== 说服与影响类 ===================== #
+    {
+        "id": "foot_in_door",
+        "name": "登门槛效应",
+        "category": "说服影响",
+        "definition": "人一旦答应了小要求，就更容易答应后续更大的要求。",
+        "scenario": "NPD/操控画像——对方从‘帮个小忙’开始，逐步升级到借钱、担保、放弃边界。",
+        "strategy": "识别这种渐进升级：小要求本身不可怕，可怕的是它后面跟着一串越来越大的要求；健康用法是反过来的——你自己不一次向对方提大要求。",
+        "taboo": "不要故意用‘先提小要求’去驯化对方；也不要因为‘只是个小忙’就麻木地答应大要求。",
+        "persona_effectiveness": "NPD/马基雅维利倾向者常用此术；焦虑型、讨好型最容易被这套带进去。",
+        "rec_tips": ["识别要求是否在渐进升级"],
+        "forb_tips": ["因‘只是小忙’就麻木答应"],
+        "tasks": ["列出对方最近1个月对你提过的所有要求，按时间排序，看是否存在逐级升级模式（基于登门槛效应识别）"],
+        "match": _m(npd=True),
+    },
+    {
+        "id": "door_in_face",
+        "name": "留面子效应",
+        "category": "说服影响",
+        "definition": "先提一个离谱到会被拒的大要求，被拒后再提真实的小要求，对方更容易答应。",
+        "scenario": "操控关系中——‘你周末陪我去外地见我家人？…那至少今晚陪我聊到12点吧’。",
+        "strategy": "识别这套话术：先听出离谱的那个，再决定真实诉求是什么；健康沟通直接说真实需求，不玩反差。",
+        "taboo": "不要把这套用在对方身上——被识破后信任直接清零。",
+        "persona_effectiveness": "对讨好型、低分化者有效；安全型/高分化者会直接识破。",
+        "rec_tips": ["直接说出真实需求，不玩反差"],
+        "forb_tips": ["先提离谱要求再退到真实要求"],
+        "tasks": ["下次对方先提一个你觉得离谱的要求时，停一下问自己：TA真正想要的是什么（基于留面子效应识别）"],
+        "match": _m(npd=True),
+    },
+    {
+        "id": "low_ball",
+        "name": "低球技术",
+        "category": "说服影响",
+        "definition": "先给出诱人条件让你答应，答应后再追加真实代价。",
+        "scenario": "画饼/伪装画像——‘我以后会对你很好的’，在一起后才暴露真实要求。",
+        "strategy": "对‘先甜后索’保持警惕：重大承诺（钱/同居/异地）前，观察对方在无利益场景下的真实表现，而不是听承诺。",
+        "taboo": "不要反过来用这招钓对方——这是欺骗，不是策略。",
+        "persona_effectiveness": "欺骗风险高的画像高频使用；对渴望被爱的焦虑型杀伤力最大。",
+        "rec_tips": ["重大承诺前先看无利益场景表现"],
+        "forb_tips": ["轻信口头大饼"],
+        "tasks": ["把对方画过的‘未来大饼’列出来，对照至今已兑现几条（基于低球技术识别）"],
+        "match": _m(deception_high=True),
+    },
+    {
+        "id": "overjustification",
+        "name": "过度理由效应",
+        "category": "说服影响",
+        "definition": "过度的外部奖励会削弱内在动机——用钱/礼物堆出来的好感，停了就没。",
+        "scenario": "用户超额投入阶段——你以为砸钱砸礼物能换来爱，其实对方习惯了被供养，离开你不是因为爱而是因为划算。",
+        "strategy": "把投入重心从物质转向共鸣：高质量对话、共同经历、被理解；礼物只做点缀。",
+        "taboo": "不要在关系出问题时‘加码送礼’——这会让对方把你的爱兑换成价格。",
+        "persona_effectiveness": "对投入失衡（user_overinvest）者最需要；对本身图钱的对象则是红线信号。",
+        "rec_tips": ["把投入重心从物质转向共鸣"],
+        "forb_tips": ["关系出问题时加码送礼"],
+        "tasks": ["盘点你最近1个月为关系花的钱 vs 花的‘专注陪伴时间’，本周补一次无消费的深度对话（基于过度理由效应）"],
+        "match": _m(invest_over=True),
+    },
+    {
+        "id": "cognitive_dissonance",
+        "name": "认知失调",
+        "category": "说服影响",
+        "definition": "行为与信念冲突时人会扭曲信念来合理化行为（‘他对我不好，但我离不开’）。",
+        "scenario": "NPD/糟糕关系中你明知不对却反复合理化：‘他只是不会表达’‘他其实爱我’。",
+        "strategy": "用事实清单对抗合理化：写下TA实际做了什么（不是说了什么）；识别自己是在‘减少失调’而不是在‘分析关系’。",
+        "taboo": "不要通过‘对TA更好’来减少失调——这是在给糟糕关系追加沉没成本。",
+        "persona_effectiveness": "NPD 伴侣关系中的受害者几乎人人有此失调；安全型能较快识别。",
+        "rec_tips": ["用事实清单对抗自我合理化"],
+        "forb_tips": ["用加倍付出来合理化糟糕关系"],
+        "tasks": ["写下‘对方对我不好的3个事实’和‘我留下来的3个真实理由’，对照看是否成立（基于认知失调理论）"],
+        "match": _m(npd=True),
+    },
+    {
+        "id": "self_perception",
+        "name": "自我知觉理论",
+        "category": "说服影响",
+        "definition": "人通过观察自己的行为来推断自己的态度——我一直在主动，所以我很在意。",
+        "scenario": "投入失衡时——你以为自己深爱，其实可能只是习惯了主动。",
+        "strategy": "定期做自我观察：如果去掉‘已经投入的时间’，你现在还会选择开始这段关系吗？据此调整投入节奏。",
+        "taboo": "不要把‘我都坚持这么久了’当成爱本身——那可能只是行为惯性。",
+        "persona_effectiveness": "对所有长期投入者都适用；对焦虑型尤其需要。",
+        "rec_tips": ["定期自检：去掉惯性后还想继续吗"],
+        "forb_tips": [],
+        "tasks": ["做一次自我知觉自检：写下‘如果今天重新认识TA，我还会开始吗’（基于自我知觉理论）"],
+        "match": _m(invest_over=True),
+    },
+    {
+        "id": "authority_effect",
+        "name": "权威效应",
+        "category": "说服影响",
+        "definition": "人容易被‘地位/专家/为你好’的话术压服，放弃自己的判断。",
+        "scenario": "NPD关系中——‘我吃过的盐比你吃过的米多’‘我都是为你好’‘你不懂，听我的’。",
+        "strategy": "识别身份压迫：无论对方头衔多高，你的感受是唯一需要被尊重的；用‘我理解你经验多，但我的感受是…’回应。",
+        "taboo": "不要反过来用‘我比你懂’去压对方——关系里没有上下级。",
+        "persona_effectiveness": "NPD/控制型常用；低分化、讨好型最容易被压服。",
+        "rec_tips": ["用感受回应身份压迫"],
+        "forb_tips": ["用‘我比你懂’压对方"],
+        "tasks": ["记录本周对方是否说过‘我都是为你好/你不懂’类话术，区分建议与压迫（基于权威效应识别）"],
+        "match": _m(npd=True),
+    },
+    {
+        "id": "social_proof",
+        "name": "社会认同",
+        "category": "说服影响",
+        "definition": "人会通过‘别人怎么对待这个人’来判断TA的价值。",
+        "scenario": "初识期——你的社交圈状态、朋友对你的态度，比你自夸更有说服力。",
+        "strategy": "自然展示健康的社交联结（和朋友的合影、被人喜欢的细节），让对方看到你是被群体接纳的人；不需要炫。",
+        "taboo": "伪造社交证明（买赞、摆拍、租道具）——被拆穿就是信任崩塌。",
+        "persona_effectiveness": "对初识期所有人有效；对高欺骗画像，过度的社会展示反而可疑。",
+        "rec_tips": ["自然展示健康社交联结"],
+        "forb_tips": ["伪造社交证明"],
+        "tasks": ["本周安排一次有朋友在场的轻松集体活动，让对方自然看到你的社交状态（基于社会认同原理）"],
+        "match": _m(stage_le=3),
+    },
+    {
+        "id": "liking_principle",
+        "name": "喜好原理",
+        "category": "说服影响",
+        "definition": "人更容易答应自己喜欢的人的请求；而相似性、真诚赞美会制造喜欢。",
+        "scenario": "所有阶段——你先真诚地看见对方，对方才会靠近你。",
+        "strategy": "找一个你们真实的相似点（口味/经历/价值观）自然共鸣；赞美要具体到细节，不空泛。",
+        "taboo": "为了被喜欢而伪造相似——被发现一次，全部真诚清零。",
+        "persona_effectiveness": "对安全型、回避型都有效；对NPD，你的喜欢会被当成燃料而不是连接。",
+        "rec_tips": ["具体赞美对方一个细节"],
+        "forb_tips": ["伪造相似点讨好"],
+        "tasks": ["本周真诚地夸对方一个具体细节（不是‘你真好’，而是‘你刚才照顾服务员的那个动作很温柔’）（基于喜好原理）"],
+        "match": _m(always=True),
+    },
+    {
+        "id": "scarcity_principle",
+        "name": "稀缺原理",
+        "category": "说服影响",
+        "definition": "越稀缺的东西显得越珍贵；‘追我的人很多’会制造紧迫感。",
+        "scenario": "NPD/猎手型——对方反复暗示自己抢手、你再不抓紧就没了。",
+        "strategy": "识别稀缺话术：真正喜欢你的人不需要用‘别人追我’来吓你；健康用法是你自己保持生活丰富，不把全部注意力押在对方身上。",
+        "taboo": "不要故意玩‘我身边很多人追’来刺激对方——这是操控，安全型会直接退出。",
+        "persona_effectiveness": "NPD高频使用；焦虑型最容易被稀缺话术激起争夺欲。",
+        "rec_tips": ["保持自己生活丰富，不押注对方"],
+        "forb_tips": ["用‘别人追我’刺激对方"],
+        "tasks": ["记录对方最近一次说‘我条件很好/很多人追我’的语境，区分自信还是施压（基于稀缺原理识别）"],
+        "match": _m(npd=True),
+    },
+    {
+        "id": "reciprocity_principle",
+        "name": "互惠原理",
+        "category": "说服影响",
+        "definition": "人收到好处后会产生回报压力；健康互惠让关系流动，被滥用就是人情债。",
+        "scenario": "无事献殷勤/早期大额付出——对方先送大礼，后续提要求你不好意思拒绝。",
+        "strategy": "收到好意自然回礼，但保持金额对等；面对‘先给小恩小惠再提大要求’的模式，把‘感谢’和‘答应要求’分开处理。",
+        "taboo": "不要用‘我都为你花了这么多’绑架对方回报——这是情绪债。",
+        "persona_effectiveness": "讨好型、焦虑型最容易被互惠压力套牢。",
+        "rec_tips": ["回礼保持对等，把感谢与要求分开"],
+        "forb_tips": ["用付出绑架对方回报"],
+        "tasks": ["盘点最近收到的超出关系阶段的好意，主动对等回一次礼，避免人情债累积（基于互惠原理）"],
+        "match": _m(unwarranted=True),
+    },
+    {
+        "id": "commitment_consistency",
+        "name": "承诺一致性",
+        "category": "说服影响",
+        "definition": "人一旦公开/小步承诺了某件事，就倾向于保持一致——哪怕最初的承诺是被推着说的。",
+        "scenario": "NPD关系——对方逼你先公开表态/先叫老婆/先见家长，让你因‘已经承诺了’而留在糟糕关系里。",
+        "strategy": "识别‘被推着快速承诺’的压力：承诺要按自己的节奏给；健康用法是你自己的小承诺必兑现，积累可信。",
+        "taboo": "不要用‘你都答应我了’去绑架对方的下一步——承诺是信任的结果，不是绳套。",
+        "persona_effectiveness": "NPD/马基雅维利者擅长制造虚假承诺；讨好型最容易随口承诺然后被绑定。",
+        "rec_tips": ["按自己节奏给承诺，小承诺必兑现"],
+        "forb_tips": ["用‘你都答应了’绑架下一步"],
+        "tasks": ["列出你最近‘为了平息冲突而随口答应’的事，本周核实哪些是你真心想兑现的（基于承诺一致性识别）"],
+        "match": _m(npd=True),
+    },
+
+    # ===================== 恋爱专属类 ===================== #
+    {
+        "id": "beibao_law",
+        "name": "贝勃定律",
+        "category": "恋爱专属",
+        "definition": "强烈刺激之后，小刺激变得不敏感；初期付出越猛，后期越难让对方感动。",
+        "scenario": "稳定期（stage≥6）——你刚开始天天送花，后来纪念日送一次对方都觉得平淡。",
+        "strategy": "初期不猛轰，把热情匀到长期；稳定期靠细节（记住TA随口说的事）而不是加码花钱。",
+        "taboo": "不要矛盾期用‘加倍付出’试图换回感动——阈值已经被你自己抬高了。",
+        "persona_effectiveness": "对所有长期关系都生效；情绪不稳定者阈值波动更大。",
+        "rec_tips": ["稳定期靠细节而非加码"],
+        "forb_tips": ["矛盾期加倍花钱挽回"],
+        "tasks": ["这周做一件‘记住TA随口提过的小事’的行动（基于贝勃定律：细节比加码更有效）"],
+        "match": _m(stage_in=(6, 7, 8, 9, 10)),
+    },
+    {
+        "id": "intermittent_reinforcement",
+        "name": "间歇性强化",
+        "category": "恋爱专属",
+        "definition": "不定期、不可预测的奖励比稳定奖励更让人上瘾——这是老虎机原理。",
+        "scenario": "对方对你忽冷忽热：热的时候让你上头，冷的时候让你焦虑加倍；你反而更放不下。",
+        "strategy": "识别对方是否在用冷热交替影响你的感受；你自己保持稳定、可预测的回应节奏。若反向使用冷热交替：对焦虑型会形成真实依赖与创伤、对安全型会直接退出关系（可预见代价）。",
+        "taboo": "若反过来用这招去'钓'对方：对焦虑型会造成真实创伤、对安全型会直接退出关系。",
+        "persona_effectiveness": "焦虑型对此机制最敏感、最易上瘾；NPD 常主动使用；安全型能识别并不受影响。",
+        "rec_tips": ["识别冷热交替模式，保持自己回应节奏稳定"],
+        "forb_tips": ["故意忽冷忽热吊对方"],
+        "tasks": ["记录对方最近10次回应的间隔和温度，画出冷热曲线，判断是否存在间歇性强化模式（基于间歇性强化原理识别）"],
+        "match": _m(attach_in=("anxious",)),
+    },
+    {
+        "id": "franklin_effect",
+        "name": "富兰克林效应",
+        "category": "恋爱专属",
+        "definition": "帮过你的人会更愿意再帮你——人通过‘我为TA付出了’来合理化喜欢。",
+        "scenario": "用户超额投入时——一直是你在付出，对方反而不珍惜；适度请对方帮个小忙，创造互相投入。",
+        "strategy": "请对方帮一个低难度、不伤尊严的小忙（推荐一本书/帮你选个东西），让对方在关系里有参与感。",
+        "taboo": "对NPD/操控画像用这招：等于递给他反向利用的权力；请对方帮涉及钱的忙：会把关系拉入债务/权力纠缠。",
+        "persona_effectiveness": "对安全型、回避型都健康有效；对NPD会被反向利用。",
+        "rec_tips": ["请对方帮一个低难度小忙"],
+        "forb_tips": ["请NPD涉及钱的忙"],
+        "tasks": ["本周自然地请对方帮一个不涉及钱的小忙，观察TA的回应方式（基于富兰克林效应）"],
+        "match": _m(invest_over=True),
+    },
+    {
+        "id": "suspension_bridge",
+        "name": "吊桥效应",
+        "category": "恋爱专属",
+        "definition": "生理唤醒（心跳/紧张）会被错误归因到身边的人身上——心跳时你更容易觉得是爱。",
+        "scenario": "回避型关系升温难——平淡约会永远温吞；轻度刺激的共同活动能加速情感归因。",
+        "strategy": "与回避型安排共同的轻度唤醒活动（徒步/过山车/恐怖片/短途探路），让唤醒自然发生；这是健康的氛围营造，不是人为制造危险。",
+        "taboo": "不要故意制造惊险/危机来‘逼出感情’——那是胁迫，不是心动。",
+        "persona_effectiveness": "对回避型最有效（他们在共同活动中比面对面深聊更容易打开）；对焦虑型也有效但需控制强度。",
+        "rec_tips": ["安排轻度唤醒的共同活动"],
+        "forb_tips": ["人为制造惊险逼对方心动"],
+        "tasks": ["下次约会选一个轻度刺激的共同活动（徒步/展览/新奇餐厅），观察对方在活动中的开放度（基于吊桥效应）"],
+        "match": _m(attach_in=("avoidant", "fearful"), stage_in=(3, 4, 5, 6)),
+    },
+    {
+        "id": "loss_aversion",
+        "name": "损失厌恶",
+        "category": "恋爱专属",
+        "definition": "失去的痛苦大约是同等得到快乐的两倍；人会为了避免‘失去’而留在糟糕关系里。",
+        "scenario": "你明知关系不对，但‘分手=失去’的恐惧让你反复回头。",
+        "strategy": "做决定时把问题换成：‘如果我今天单身，我会选择开始这段关系吗？’——用‘获得视角’代替‘损失视角’。",
+        "taboo": "不要用‘你会失去我’去威胁对方——这只会制造恐惧，不是爱。",
+        "persona_effectiveness": "焦虑型、长期投入者最受损失厌恶支配。",
+        "rec_tips": ["用获得视角替代损失视角做决定"],
+        "forb_tips": ["用‘你会失去我’威胁对方"],
+        "tasks": ["做一次视角切换：写下‘如果单身，我还会选TA吗’，区分爱与怕失去（基于损失厌恶）"],
+        "match": _m(attach_in=("anxious",), invest_over=True),
+    },
+    {
+        "id": "sunk_cost",
+        "name": "沉没成本效应",
+        "category": "恋爱专属",
+        "definition": "已经投入且不可收回的成本（时间/钱/青春）会让人继续糟糕决策。",
+        "scenario": "'都在一起3年了，现在分太亏了'——这是沉没成本在说话，不是爱在说话。",
+        "strategy": "把‘已经投入’和‘未来值得’分开记账：过去不可收回，未来的每一天都该为值得而留。",
+        "taboo": "不要用‘我为你付出了这么多’要求对方留下——那是你的账，不是TA的债。",
+        "persona_effectiveness": "长期关系+投入失衡者最严重。",
+        "rec_tips": ["区分已投入与未来值得"],
+        "forb_tips": ["用付出史要求对方留下"],
+        "tasks": ["写下‘如果没有过去这些年，我对这段关系的未来打几分’（基于沉没成本效应）"],
+        "match": _m(invest_over=True),
+    },
+    {
+        "id": "aronson_effect",
+        "name": "阿伦森效应",
+        "category": "恋爱专属",
+        "definition": "先少后多的评价比从头到尾的赞美更让人喜欢——‘越来越认可你’比‘一开始就狂夸’可信。",
+        "scenario": "暧昧期（stage 2-5）——一上来就把对方夸上天，后面只能贬值。",
+        "strategy": "赞美节奏递进：初期中肯（带一点小调侃），熟悉后增加具体肯定；让对方感到‘你是真的越了解我越欣赏我’。",
+        "taboo": "不要用‘先贬后褒’戏弄对方——被识破就是羞辱。",
+        "persona_effectiveness": "对安全型、高自我分化者效果最好；对焦虑型初期不要贬，会被当真。",
+        "rec_tips": ["赞美节奏递进，初期中肯后期具体"],
+        "forb_tips": ["先贬后褒戏弄对方"],
+        "tasks": ["本周把一句空泛夸奖换成具体递进的认可（基于阿伦森效应）"],
+        "match": _m(stage_in=(2, 3, 4, 5)),
+    },
+    {
+        "id": "zeigarnik_effect",
+        "name": "蔡加尼克效应",
+        "category": "恋爱专属",
+        "definition": "未完成的事比完成的事更让人惦记。",
+        "scenario": "暧昧期聊天——聊到高潮时自然收尾，比硬聊到无话可说更让对方想继续。",
+        "strategy": "修复引导版：不是故意吊人，而是不在双方疲惫/忙时硬聊到枯竭；一个未完的有趣话题留到明天，对方会主动来找你。",
+        "taboo": "不要把这招玩成‘故意不回消息吊人’——对焦虑型这是伤害，不是技巧。",
+        "persona_effectiveness": "对所有阶段都自然生效；对焦虑型要谨慎使用，必须给明确的‘明天继续’信号。",
+        "rec_tips": ["在话题高潮处自然收尾"],
+        "forb_tips": ["故意不回消息吊对方"],
+        "tasks": ["下次聊天在聊得最投入时，温和地结束：‘这个话题有意思，明天接着说’（基于蔡加尼克效应）"],
+        "match": _m(stage_in=(3, 4, 5)),
+    },
+    {
+        "id": "mere_exposure",
+        "name": "曝光效应",
+        "category": "恋爱专属",
+        "definition": "重复、中性的出现会自然提升好感（熟悉产生喜欢）。",
+        "scenario": "回避型——你越躲着不出现，TA越没机会习惯你；但高频骚扰又会触发逃避。",
+        "strategy": "低压力、可预测地增加自然出现频率：群里偶尔发言、固定时间简短问候、共同场景偶遇；每次都轻量、不索取回应。",
+        "taboo": "不要高频私聊轰炸回避型——那不是曝光，是入侵，会触发对方去激活策略。",
+        "persona_effectiveness": "对回避型最相关（他们需要‘熟悉感’来替代‘亲密感’）；对安全型自然即可。",
+        "rec_tips": ["低压力可预测地增加自然出现频率"],
+        "forb_tips": ["高频私聊轰炸回避型"],
+        "tasks": ["本周设计2次低压力的自然出现（共同群/固定时间问候），每次不索取回复（基于曝光效应）"],
+        "match": _m(attach_in=("avoidant", "fearful"), stage_in=(1, 2, 3, 4)),
+    },
+    {
+        "id": "romeo_juliet",
+        "name": "罗密欧与朱丽叶效应",
+        "category": "恋爱专属",
+        "definition": "外部阻力会暂时点燃激情，但激情退去后关系内部的问题会加倍反弹。",
+        "scenario": "家人反对/朋友不看好时——你们反而更粘，但这是阻力给的假性亲密。",
+        "strategy": "外部反对时别把‘对抗全世界’当成爱的证明；把注意力拉回你们俩到底合不合；不要拉亲友围攻对方。",
+        "taboo": "不要故意制造外部阻力来‘证明’爱——那是在给关系埋雷。",
+        "persona_effectiveness": "对年轻、低分化关系最显著；回避型在外部压力下反而会逃得更远。",
+        "rec_tips": ["把注意力拉回两人本身合不合"],
+        "forb_tips": ["拉亲友围攻对方逼表态"],
+        "tasks": ["外部反对时，写下‘抛开反对，我们俩本身的3个真实问题’（基于罗密欧与朱丽叶效应）"],
+        "match": _m(attach_in=("avoidant", "fearful"), stage_in=(3, 4, 5, 6)),
+    },
+
+    # ===================== 关系理论类 ===================== #
+    {
+        "id": "sternberg_triangle",
+        "name": "爱情三元论（Sternberg）",
+        "category": "关系理论",
+        "definition": "完美爱情=亲密+激情+承诺，缺一角都是残缺的爱。",
+        "scenario": "所有阶段自检——你们现在缺哪一角？",
+        "strategy": "定期自检三角：亲密（倾诉）够不够？激情（吸引）在不在？承诺（未来）有没有共识？补最短的那一角。",
+        "taboo": "不要用‘我们感情很好’掩盖某一角长期空缺（例如只有承诺没有亲密=室友）。",
+        "persona_effectiveness": "普适；对长期关系（stage≥6）尤其重要。",
+        "rec_tips": ["自检三角并补最短角"],
+        "forb_tips": [],
+        "tasks": ["给当前关系的亲密/激情/承诺三项各打个分，本周针对最低项做一次具体行动（基于爱情三元论）"],
+        "match": _m(always=True),
+    },
+    {
+        "id": "gottman_four_horsemen",
+        "name": "Gottman婚姻四骑士",
+        "category": "关系理论",
+        "definition": "批评/蔑视/防御/筑墙是关系破裂的四大预测因子。",
+        "scenario": "冲突风格为竞争/爆发型，或情绪稳定性低时。",
+        "strategy": "吵架时自检：我在攻击人格（批评）还是翻旧账讽刺（蔑视）？在找借口（防御）还是沉默消失（筑墙）？发现任一骑士立刻喊停，用修复尝试（道歉/幽默/示弱）替代。",
+        "taboo": "蔑视（讽刺/翻白眼/居高临下）是四骑士之首，任何关系里都是红线。",
+        "persona_effectiveness": "竞争型冲突+低情绪稳定画像最常触发。",
+        "rec_tips": ["冲突中识别四骑士并用修复尝试替代"],
+        "forb_tips": ["讽刺翻白眼式蔑视"],
+        "tasks": ["下次吵架时记录自己是否说出了批评/蔑视/防御/筑墙的话，事后复盘替换说法（基于Gottman四骑士）"],
+        "match": _m(conflict_in=("competing",), es_in=("low",)),
+    },
+    {
+        "id": "emotional_bank_account",
+        "name": "情感账户理论",
+        "category": "关系理论",
+        "definition": "每次贴心=存款，每次伤害=取款；关系的余额决定冲突时谁更耐伤。",
+        "scenario": "所有阶段——日常互动都在存款/取款。",
+        "strategy": "日常有意识存款：记住小事、兑现承诺、主动关心；取款后（吵架/失信）当天补一笔存款。目标正负比≥5:1。",
+        "taboo": "不要平时零存、吵架时巨取——账户空了，一句正常的话都像攻击。",
+        "persona_effectiveness": "普适；长期关系尤其靠账户余额撑过低谷。",
+        "rec_tips": ["日常有意识存款，取款后当天补"],
+        "forb_tips": [],
+        "tasks": ["本周做3件小额存款行动（记住随口一提的事/主动关心/兑现小承诺）（基于情感账户理论）"],
+        "match": _m(always=True),
+    },
+    {
+        "id": "attachment_foundational",
+        "name": "依恋理论（基础挂载）",
+        "category": "关系理论",
+        "definition": "早期关系经验形成的依恋策略，决定人在亲密中的焦虑-回避平衡。",
+        "scenario": "所有分析的底层框架——与主矩阵同源。",
+        "strategy": "理解对方行为不是‘不爱你’，而是依恋策略：回避=怕被吞噬，焦虑=怕被抛弃；据此选择回应节奏。",
+        "taboo": "不要把依恋类型当标签羞辱对方（‘你就是回避型有病’）。",
+        "persona_effectiveness": "普适。",
+        "rec_tips": [],
+        "forb_tips": [],
+        "tasks": [],
+        "match": _m(always=True),
+    },
+    {
+        "id": "five_languages",
+        "name": "爱的五种语言",
+        "category": "关系理论",
+        "definition": "人接收爱的主通道不同：肯定言辞/精心时刻/礼物/服务行动/身体接触。",
+        "scenario": "所有阶段——给错语言等于没给。",
+        "strategy": "识别对方的主爱语，用TA的语言而不是你的语言表达爱；同时告诉对方你的爱语。",
+        "taboo": "不要用自己习惯的方式（你爱送礼就天天送）去对一个需要陪伴的人。",
+        "persona_effectiveness": "普适；与主矩阵 LOVE_MATRIX 同源。",
+        "rec_tips": [],
+        "forb_tips": [],
+        "tasks": [],
+        "match": _m(always=True),
+    },
+
+    # ===================== v3.0 新增：情绪管理类 ===================== #
+    {
+        "id": "wild_horse_effect",
+        "name": "野马效应",
+        "category": "情绪管理",
+        "definition": "因小事引发情绪失控，最终伤人伤己——被激怒后的行为代价远大于触发事件本身。",
+        "scenario": "情绪稳定性低/爆发型冲突画像——对方一句无心的话就能让你炸掉一整晚。",
+        "strategy": "情绪暂停法：吵架时先离开10分钟喝杯水，不在情绪顶点做任何决定/发任何消息；事后再谈。",
+        "taboo": "不要用‘你先冷静’来冷暴力——那是堵不是疏；暂停要说‘我现在有点上头，10分钟后回来聊’。",
+        "persona_effectiveness": "低情绪稳定/竞争型冲突画像最相关；对焦虑型也常见。",
+        "rec_tips": ["情绪上头时暂停10分钟再回应"],
+        "forb_tips": ["用‘你先冷静’来冷暴力"],
+        "tasks": ["下次感到情绪上头时，练习先说‘我现在有点上头，10分钟后回来聊’并真的离开10分钟（基于野马效应）"],
+        "match": _m(es_in=("low",)),
+    },
+    {
+        "id": "kick_cat_effect",
+        "name": "踢猫效应",
+        "category": "情绪管理",
+        "definition": "坏情绪会沿等级链向下传递，最弱小的那个（伴侣/孩子）承接所有无关怒火。",
+        "scenario": "工作受气/外部压力大时——你把白天对老板的火撒到伴侣一句无心的话上。",
+        "strategy": "情绪隔离：进门之前在楼下/车里坐3分钟，把外部情绪留在门外；告诉自己‘TA不是那个惹我的人’。",
+        "taboo": "不要把伴侣当情绪垃圾桶——说‘我今天被老板骂了，想吐槽10分钟’比直接发火健康10倍。",
+        "persona_effectiveness": "所有高压职业/外部压力大的用户；对情绪稳定性低者更需要。",
+        "rec_tips": ["进门之前把外部情绪留在门外"],
+        "forb_tips": ["把外部压力发泄到伴侣身上"],
+        "tasks": ["本周下班回家前，在车里/楼下坐3分钟做情绪切换，再进门和伴侣说话（基于踢猫效应）"],
+        "match": _m(es_in=("low",)),
+    },
+    {
+        "id": "emotion_contagion",
+        "name": "情绪转移定律",
+        "category": "情绪管理",
+        "definition": "情绪会像感冒一样传染——你紧绷，对方也紧绷；你放松，对方也放松。",
+        "scenario": "所有阶段——你自己状态差时，对话气氛也会跟着沉。",
+        "strategy": "情绪引领：见面前先把自己调整到平稳状态（不是装开心，而是先把焦虑处理掉），再开始对话。",
+        "taboo": "不要强迫对方‘你应该开心一点’——那是否定情绪，不是引领。",
+        "persona_effectiveness": "普适；对焦虑型用户尤其有用（你不先稳住，对方会被你的焦虑带着跑）。",
+        "rec_tips": ["互动前先调整自己的情绪状态"],
+        "forb_tips": ["强迫对方‘你应该开心’"],
+        "tasks": ["下次和对方聊天前，先花2分钟把自己的情绪调到平稳（深呼吸/写下来），再开始对话（基于情绪转移定律）"],
+        "match": _m(always=True),
+    },
+
+    # ===================== v3.0 新增：关系距离类 ===================== #
+    {
+        "id": "hedgehog_dilemma",
+        "name": "刺猬法则",
+        "category": "关系距离",
+        "definition": "太冷会想靠近，太近会互相刺伤——关系需要找到双方都舒适的距离。",
+        "scenario": "回避型关系——你一靠近TA就退，TA一退你就追，追得越紧TA跑得越远。",
+        "strategy": "距离管理：主动把联系频率降到你自己也舒服的节奏；给对方空间，也给自己空间；让距离由‘追逃’变成‘各自呼吸后自然靠近’。",
+        "taboo": "不要用‘距离’来逃避亲密——真的需要谈的时候必须一对一谈清楚，不能拿空间当借口。",
+        "persona_effectiveness": "回避型/恐惧型最相关；安全型也需要定期校准距离。",
+        "rec_tips": ["把联系频率降到双方都舒适的节奏"],
+        "forb_tips": ["用‘距离’来逃避该谈的问题"],
+        "tasks": ["本周把主动联系的频率降到你自己也不焦虑的程度，观察TA在低压下的自然回应（基于刺猬法则）"],
+        "match": _m(attach_in=("avoidant", "fearful")),
+    },
+    {
+        "id": "self_disclosure_law",
+        "name": "自我暴露定律",
+        "category": "关系距离",
+        "definition": "适当展示真实自我能拉近距离，但暴露过快/过多会让对方警觉。",
+        "scenario": "初识到暧昧期（stage 2-5）——第一次见面就掏心掏肺，对方反而被吓跑。",
+        "strategy": "渐进式暴露：第一层说喜好，第二层说经历，第三层说感受，第四层才说创伤；一层等对方也分享类似深度再进下一层。",
+        "taboo": "不要把对方的隐私暴露给第三方——那是信任的死刑。",
+        "persona_effectiveness": "初识期普适；对回避型尤其要慢，他们会被过快的亲密吓退。",
+        "rec_tips": ["按四层节奏渐进分享内心"],
+        "forb_tips": ["第一次见面就掏心掏肺"],
+        "tasks": ["本周选一个比‘喜好’深一层但不涉及创伤的话题，温和分享一次，观察对方是否也分享类似深度（基于自我暴露定律）"],
+        "match": _m(stage_in=(2, 3, 4, 5)),
+    },
+    {
+        "id": "dark_effect",
+        "name": "黑暗效应",
+        "category": "关系距离",
+        "definition": "光线柔和的环境会降低戒备感，人更容易产生亲近感。",
+        "scenario": "约会场景（stage 3-5）——明亮的会议室式约会永远温吞。",
+        "strategy": "环境选择：约会选光线柔和、不嘈杂的地方（傍晚的江边/小咖啡馆/灯光暖的餐厅），比明亮办公室更容易拉近距离。",
+        "taboo": "不要利用黑暗做对方不情愿的事——黑暗是氛围，不是遮羞布。",
+        "persona_effectiveness": "约会阶段普适；对回避型尤其有效（他们在昏暗环境比面对面直视更容易打开）。",
+        "rec_tips": ["约会选光线柔和的场所"],
+        "forb_tips": ["利用黑暗做对方不情愿的事"],
+        "tasks": ["下次约会主动选一个光线柔和、不嘈杂的场所，观察对话是否比平时更容易深入（基于黑暗效应）"],
+        "match": _m(stage_in=(3, 4, 5)),
+    },
+
+    # ===================== v3.0 新增：互动策略类 ===================== #
+    {
+        "id": "hercules_effect",
+        "name": "海格力斯效应",
+        "category": "互动策略",
+        "definition": "冤冤相报只会两败俱伤——对方刺你一下你刺回去，最后两个人都流血。",
+        "scenario": "竞争型冲突画像——吵架变成比谁嗓门大、谁翻旧账更狠。",
+        "strategy": "非对抗回应：对方发脾气时不硬刚，用一句‘我听出来你现在很生气，我们等下再谈’暂停循环。",
+        "taboo": "不要无底线退让——那不是以德报怨，是讨好；退让后要在双方平静时把边界说清楚。",
+        "persona_effectiveness": "竞争型/爆发型冲突画像最相关；对焦虑型也常见（他们容易被激起报复欲）。",
+        "rec_tips": ["对方发脾气时不硬刚，先暂停循环"],
+        "forb_tips": ["无底线退让当讨好"],
+        "tasks": ["下次对方情绪激动时，练习先说‘我听出来你现在很生气，我们等下再谈’而不是顶回去（基于海格力斯效应）"],
+        "match": _m(conflict_in=("competing",)),
+    },
+    {
+        "id": "south_wind_law",
+        "name": "南风法则",
+        "category": "互动策略",
+        "definition": "温暖比严寒更有力量——温和的方式让人主动脱下外套，强硬只会让人把衣服裹得更紧。",
+        "scenario": "所有阶段——你越命令‘你应该怎样’，对方越抗拒。",
+        "strategy": "温和表达：把‘你必须/你应该’换成‘我希望/我需要’，把要求变成邀请。",
+        "taboo": "不要温和地操控对方——温柔的语气+操控的内容，被识破后比直接命令更伤人。",
+        "persona_effectiveness": "普适；对回避型尤其有效（他们对高压会直接关闭沟通）。",
+        "rec_tips": ["把命令换成邀请和需求表达"],
+        "forb_tips": ["用温柔语气包装操控内容"],
+        "tasks": ["本周把一句‘你应该XX’换成‘我希望XX，因为我XX’，观察对方回应变化（基于南风法则）"],
+        "match": _m(always=True),
+    },
+    {
+        "id": "north_wind_effect",
+        "name": "北风效应",
+        "category": "互动策略",
+        "definition": "强硬手段迫使别人听从，结果往往适得其反——对方会阳奉阴违或直接退出。",
+        "scenario": "NPD/控制型画像——对方用‘你必须听我的’压你；或者你自己忍不住用命令语气。",
+        "strategy": "避免强硬：识别对方的北风式话术（‘你必须/你应该/我都是为你好’），同时检查自己有没有在用。",
+        "taboo": "不要把‘我都是为你好’当借口——那是最典型的北风话术。",
+        "persona_effectiveness": "NPD/控制型常用；对讨好型杀伤力最大。",
+        "rec_tips": ["识别‘你必须/为你好’式强硬话术"],
+        "forb_tips": ["把‘我都是为你好’当借口"],
+        "tasks": ["记录本周对方或自己说过的‘你必须/你应该/我都是为你好’，区分建议还是压迫（基于北风效应识别）"],
+        "match": _m(npd=True),
+    },
+    {
+        "id": "mutual_affinity",
+        "name": "互悦机制",
+        "category": "互动策略",
+        "definition": "喜欢是互相传染的——你表达欣赏，对方更容易反过来喜欢你。",
+        "scenario": "所有阶段——你越能真诚看见对方，对方越愿意靠近你。",
+        "strategy": "积极反馈：每天找一个对方做得好的小细节，真诚说出来（不是空夸，是具体到动作）。",
+        "taboo": "不要虚伪地奉承——对方能一眼识破，识破后信任直接打折。",
+        "persona_effectiveness": "普适；对安全型最有效；对NPD，你的欣赏会被当成燃料而不是连接。",
+        "rec_tips": ["每天真诚反馈一个对方做得好的细节"],
+        "forb_tips": ["虚伪地奉承"],
+        "tasks": ["本周真诚地说一句具体的欣赏（‘你刚才XX那个动作很XX’），观察对方反应（基于互悦机制）"],
+        "match": _m(always=True),
+    },
+    {
+        "id": "vulnerability_strength",
+        "name": "示弱效应",
+        "category": "互动策略",
+        "definition": "真正的强者更懂得示弱——适当展示脆弱能激发对方的保护欲和亲近感。",
+        "scenario": "关系推进期（stage 3-6）——你永远装坚强，对方觉得你不需要TA。",
+        "strategy": "适度示弱：在安全的话题上展示一次真实的脆弱（‘这件事我其实有点没底’），让对方有参与感。",
+        "taboo": "不要用示弱来道德绑架（‘我都这样了你还不陪我’）——那不是脆弱，是勒索。",
+        "persona_effectiveness": "对回避型尤其有效（他们对‘被需要’的信号反应比‘被崇拜’更自然）。",
+        "rec_tips": ["在安全话题上适度展示真实脆弱"],
+        "forb_tips": ["用示弱进行道德绑架"],
+        "tasks": ["本周在一个安全话题上温和表达一次真实脆弱（‘这件事我其实有点没底’），观察对方的回应（基于示弱效应）"],
+        "match": _m(stage_in=(3, 4, 5, 6)),
+    },
+    {
+        "id": "conversion_effect",
+        "name": "改宗效应",
+        "category": "互动策略",
+        "definition": "好好先生做不得——有独立观点、偶尔反对的人比事事附和者更受尊重。",
+        "scenario": "所有阶段——你为了讨好对方事事说‘都行/你决定’，反而被看轻。",
+        "strategy": "独立观点：在你真正在意的事情上表达不同意见，温和但坚定；在小事上可以让步。",
+        "taboo": "不要为了反对而反对——那是杠精，不是独立。",
+        "persona_effectiveness": "普适；对高自我分化者尤其有效（他们尊重有立场的人）。",
+        "rec_tips": ["在你真正在意的事上表达独立观点"],
+        "forb_tips": ["为了反对而反对"],
+        "tasks": ["本周在一件你真正在意的小事上，温和但坚定地说出不同意见（基于改宗效应）"],
+        "match": _m(always=True),
+    },
+    {
+        "id": "in_group_effect",
+        "name": "同体效应",
+        "category": "互动策略",
+        "definition": "让人把你当成‘自己人’，关系会更牢固——语言上的‘我们’会塑造心理上的共同体。",
+        "scenario": "关系巩固期（stage 4-7）——你还在用‘我和你’，距离感就还在。",
+        "strategy": "共同体构建：把‘我和你’换成‘我们’，把‘你的问题’换成‘我们一起看看’。",
+        "taboo": "不要用‘我们’来剥夺对方的独立性（‘我们都是一家人了你还分什么’）——那是吞噬，不是共同体。",
+        "persona_effectiveness": "稳定期普适；对回避型要慢，他们对‘我们’这种词会警觉。",
+        "rec_tips": ["用‘我们’代替‘我和你’构建共同体"],
+        "forb_tips": ["用‘我们’剥夺对方独立性"],
+        "tasks": ["本周有意识地把两句‘我和你’换成‘我们’，观察对话气氛变化（基于同体效应）"],
+        "match": _m(stage_in=(4, 5, 6, 7)),
+    },
+    {
+        "id": "non_zero_sum",
+        "name": "非零和博弈",
+        "category": "互动策略",
+        "definition": "关系不是零和游戏——不是你赢就是我输，找双方都满意的解才是健康关系。",
+        "scenario": "冲突场景——吵架变成争输赢，赢了道理输了关系。",
+        "strategy": "双赢思维：冲突时问‘我们俩都能接受的方案是什么’，而不是‘谁对谁错’。",
+        "taboo": "不要把‘双赢’变成‘你都听我的’——那是零和换个说法。",
+        "persona_effectiveness": "竞争型/逃避型冲突最相关；所有长期关系都适用。",
+        "rec_tips": ["冲突时找双方都能接受的方案"],
+        "forb_tips": ["把‘双赢’变成‘你都听我的’"],
+        "tasks": ["下次有分歧时，把‘谁对谁错’换成‘我们俩都能接受的方案是什么’，至少谈一个（基于非零和博弈）"],
+        "match": _m(conflict_in=("competing", "avoiding")),
+    },
+
+    # ===================== v3.0 新增：认知偏差类 ===================== #
+    {
+        "id": "projection_bias",
+        "name": "投射效应",
+        "category": "认知偏差",
+        "definition": "自己有某种习惯/想法，就推断对方也有——‘我觉得这没什么’对方可能很在意。",
+        "scenario": "所有阶段——你以为自己是‘直来直去’，对方觉得你‘不尊重人’。",
+        "strategy": "去投射化：重要事情问一句‘这件事对你来说意味着什么’，而不是默认‘我觉得没事=没事’。",
+        "taboo": "不要用‘我以为’来解释误会——‘我以为’是投射，不是沟通。",
+        "persona_effectiveness": "普适；高自我分化者也常犯（他们以为大家都像自己一样理性）。",
+        "rec_tips": ["重要事情直接问对方感受，不默认"],
+        "forb_tips": ["用‘我以为’解释误会"],
+        "tasks": ["本周选一件你‘觉得没什么但对方可能在意’的事，直接问一次‘这件事对你来说OK吗’（基于投射效应）"],
+        "match": _m(always=True),
+    },
+    {
+        "id": "spotlight_effect",
+        "name": "聚光灯效应",
+        "category": "认知偏差",
+        "definition": "总觉得别人在关注自己——其实别人没你想的那么在意你的小失误。",
+        "scenario": "初识期（stage≤3）——你担心约会表现不好、说错话，其实对方也在紧张自己。",
+        "strategy": "自我放松：约会前告诉自己‘对方没我想的那么关注我的缺点’；把注意力从‘我表现怎样’转到‘TA是个怎样的人’。",
+        "taboo": "不要用‘反正没人在意’来放弃自我提升——放松不等于摆烂。",
+        "persona_effectiveness": "初识期/社交焦虑者最相关；回避型也常犯（他们以为自己在被评判）。",
+        "rec_tips": ["把注意力从‘我表现怎样’转到观察对方"],
+        "forb_tips": ["用‘反正没人在意’放弃自我提升"],
+        "tasks": ["下次约会/聊天前，写下你最担心的一个表现细节，事后问自己‘对方真的注意到了吗’（基于聚光灯效应）"],
+        "match": _m(stage_le=3),
+    },
+    {
+        "id": "illusion_of_control",
+        "name": "控制错觉",
+        "category": "认知偏差",
+        "definition": "以为自己能掌控对方的情绪和反应，其实很多事不可控。",
+        "scenario": "焦虑型——你反复确认/查岗，以为这样就能阻止对方离开，结果反而把对方推走。",
+        "strategy": "接受不可控：把精力放在‘我能做的’（自己的状态、自己的边界）上，放下‘让TA按我想的反应’。",
+        "taboo": "不要用‘不可控’来放弃努力——接受不可控≠不经营关系。",
+        "persona_effectiveness": "焦虑型最相关；控制欲强的用户也常见。",
+        "rec_tips": ["把精力放在自己能控制的部分"],
+        "forb_tips": ["用‘不可控’放弃经营"],
+        "tasks": ["写下一件你一直在试图控制但控制不了的事，本周做一次‘放手练习’——不查不问不确认（基于控制错觉）"],
+        "match": _m(attach_in=("anxious",)),
+    },
+
+    # ===================== v3.0 新增：其他/关系动力类 ===================== #
+    {
+        "id": "flywheel_effect",
+        "name": "飞轮效应",
+        "category": "关系动力",
+        "definition": "刚开始转动飞轮很费力，转起来后惯性会让它越来越轻松——关系前3个月需要大量投入，后期惯性维持。",
+        "scenario": "关系前期（stage 1-3）——你觉得‘好累不想主动了’，其实是飞轮还没转起来。",
+        "strategy": "前期重投入：关系前3个月有意识地多投入（稳定聊天、高质量陪伴、记住小事），让飞轮转起来；后期反而轻松。",
+        "taboo": "不要后期完全不维护——飞轮会停，而且重启比一直转更费力。",
+        "persona_effectiveness": "新关系普适；回避型的关系尤其需要前期耐心。",
+        "rec_tips": ["关系前期有意识地多投入让飞轮转起来"],
+        "forb_tips": ["后期完全不维护让飞轮停转"],
+        "tasks": ["本周为关系前期做一件‘为飞轮加一把力’的事（一次高质量陪伴/一个记住对方小事的行动）（基于飞轮效应）"],
+        "match": _m(stage_in=(1, 2, 3)),
+    },
+    {
+        "id": "praise_specific",
+        "name": "赞美定律",
+        "category": "沟通",
+        "definition": "人人都渴望被看见，但空泛的‘你真好’无效——具体到行为和努力的赞美才真的激励人。",
+        "scenario": "所有阶段——你夸了对方但对方没反应，可能是夸得太泛。",
+        "strategy": "具体赞美：夸行为和努力（‘你今天XX做得很用心’），不夸无法改变的外貌；夸过程不夸天赋。",
+        "taboo": "不要赞美对方无法改变的外貌（‘你真漂亮’），那会让人觉得你只看皮相；赞美TA的选择和行动。",
+        "persona_effectiveness": "普适；对高自尊/高自我分化者尤其有效（他们能分辨真假）。",
+        "rec_tips": ["具体赞美对方的行为和努力"],
+        "forb_tips": ["赞美无法改变的外貌"],
+        "tasks": ["本周把一句空泛夸奖换成具体到行为的赞美（基于赞美定律）"],
+        "match": _m(always=True),
+    },
+    {
+        "id": "powells_law",
+        "name": "波特定律",
+        "category": "沟通",
+        "definition": "批评要适量——指责太多只会招致反感，建设性反馈才能让人真的改进。",
+        "scenario": "冲突场景——你觉得在‘为TA好提意见’，对方听到的全是否定。",
+        "strategy": "建设性批评：先肯定一个真实的点，再说一个具体的改进建议，不要全盘否定。",
+        "taboo": "不要在公开场合批评对方——私下说才叫反馈，当众说叫羞辱。",
+        "persona_effectiveness": "竞争型冲突最相关；所有长期关系都适用。",
+        "rec_tips": ["批评先肯定再建议，私下说"],
+        "forb_tips": ["在公开场合批评对方"],
+        "tasks": ["下次需要提意见时，用‘肯定+具体建议’的句式私下说一次（基于波特定律）"],
+        "match": _m(conflict_in=("competing",)),
+    },
+    {
+        "id": "trust_integrity",
+        "name": "诚信定律",
+        "category": "关系维护",
+        "definition": "人无信则不立——关系中信任是地基，小承诺不兑现会一点点掏空地基。",
+        "scenario": "所有阶段——你随口答应‘下次带你去’，没当回事，对方记了三个月。",
+        "strategy": "守信履约：小承诺要么不答应，答应了就兑现；做不到的当场说‘这个我可能做不到’。",
+        "taboo": "不要用‘善意的谎言’合理化欺骗——善意的尺度只有你自己知道，对方听到的只是被骗。",
+        "persona_effectiveness": "普适；对回避型/高边界者尤其重要（他们在观察你是否稳定一致）。",
+        "rec_tips": ["小承诺要么不答应，答应就兑现"],
+        "forb_tips": ["用‘善意的谎言’合理化欺骗"],
+        "tasks": ["列出最近3个你随口答应但没兑现的小承诺，本周逐一兑现或主动说明（基于诚信定律）"],
+        "match": _m(always=True),
+    },
+    {
+        "id": "similarity_attraction",
+        "name": "相似吸引效应",
+        "category": "关系维护",
+        "definition": "共享价值观/兴趣/经历的人更容易互相吸引——相似性比互补更能预测关系满意度。",
+        "scenario": "初识到熟悉期（stage≤3）——你们还在找话题，其实共同兴趣就是最好的黏合剂。",
+        "strategy": "共同兴趣：找到双方都真实喜欢的事一起做；不需要假装喜欢对方的爱好，找到交集即可。",
+        "taboo": "不要假装喜欢对方的爱好来讨好——被发现一次，全部真诚清零。",
+        "persona_effectiveness": "初识期普适；长期关系中共同活动频率是满意度的强预测因子。",
+        "rec_tips": ["找到双方真实的共同兴趣一起做"],
+        "forb_tips": ["假装喜欢对方的爱好来讨好"],
+        "tasks": ["本周和对方一起做一件双方都真实感兴趣的事（不是你迁就TA，也不是TA迁就你）（基于相似吸引效应）"],
+        "match": _m(stage_le=3),
+    },
+
+    {
+        "id": "broken_window",
+        "name": "破窗效应（关系版）",
+        "category": "关系维护",
+        "definition": "小裂痕不修会变成大裂缝——第一次不道歉的吵架、第一次被无视的感受，不处理就会被制度化。",
+        "scenario": "逃避型冲突画像——小矛盾总说‘算了’，攒到某天大爆发。",
+        "strategy": "出现小不适当天温和提出来（不是翻旧账，是‘刚才那个瞬间我有点难受’）；别让‘算了’成为关系默认设置。",
+        "taboo": "不要把每件小事都上升成大审判——破窗修的是窗，不是拆房子。",
+        "persona_effectiveness": "回避型/逃避冲突画像最需要。",
+        "rec_tips": ["小不适当天温和提出"],
+        "forb_tips": ["把每件小事上升为大审判"],
+        "tasks": ["本周把一个你一直说‘算了’的小不适，用‘我感受’句式温和提一次（基于破窗效应）"],
+        "match": _m(conflict_in=("avoiding",)),
+    },
+    {
+        "id": "bucket_effect",
+        "name": "木桶效应（关系版）",
+        "category": "关系维护",
+        "definition": "关系满意度取决于最短那块板——沟通/性/金钱/信任/原生家庭，哪块最短决定水位。",
+        "scenario": "稳定期（stage≥6）——整体还行但总觉得哪里不对。",
+        "strategy": "列出关系的5-6个维度打分，找到最低项，集中补一个月，而不是平均用力。",
+        "taboo": "不要同时补所有短板——注意力分散等于没补。",
+        "persona_effectiveness": "长期关系普适。",
+        "rec_tips": ["找最低短板集中补一个月"],
+        "forb_tips": [],
+        "tasks": ["给关系的沟通/亲密/金钱/信任/未来规划5项打分，选出最低项本周行动一次（基于木桶效应）"],
+        "match": _m(stage_in=(6, 7, 8, 9, 10)),
+    },
+    {
+        "id": "pareto_8020",
+        "name": "二八定律（关系版）",
+        "category": "关系维护",
+        "definition": "20%的关键互动（一次深谈/一次高质量陪伴）带来80%的亲密感。",
+        "scenario": "关系稳定后——别把精力耗在日常琐事拉扯上。",
+        "strategy": "每周刻意安排1次高质量互动（深度对话/专心约会），其余日子轻松过；不要为小事内耗。",
+        "taboo": "不要把所有时间都变成‘任务’——关系需要松弛。",
+        "persona_effectiveness": "长期关系普适。",
+        "rec_tips": ["每周1次高质量互动"],
+        "forb_tips": [],
+        "tasks": ["本周安排1次放下手机的专注陪伴（基于二八定律）"],
+        "match": _m(stage_in=(5, 6, 7, 8)),
+    },
+    {
+        "id": "murphy_law",
+        "name": "墨菲定律（关系版）",
+        "category": "关系维护",
+        "definition": "越怕出事、越用焦虑方式预防，越容易把事情吓出来——查岗会真的逼出隐瞒。",
+        "scenario": "焦虑型/情绪不稳定——反复确认、查岗、预设最坏结果。",
+        "strategy": "把‘预防式焦虑’换成‘准备式放松’：想清楚最坏情况能不能承受，然后放下监控；信任是给自己松绑。",
+        "taboo": "不要把查岗/翻手机当成‘保护关系’——这是在教对方学会躲你。",
+        "persona_effectiveness": "焦虑型最相关。",
+        "rec_tips": ["用准备式放松替代预防式焦虑"],
+        "forb_tips": ["查岗翻手机"],
+        "tasks": ["写下你最担心发生的1件事，评估‘真发生了你能不能承受’，本周停止一次查岗行为（基于墨菲定律）"],
+        "match": _m(attach_in=("anxious",), es_in=("low",)),
+    },
+    {
+        "id": "bystander_effect",
+        "name": "旁观者效应",
+        "category": "沟通",
+        "definition": "人在群体中更难表达真实态度——重要谈话一对一效果远好于当众/群里。",
+        "scenario": "需要谈重要话题（关系定位/矛盾/未来）时，别在朋友聚会上提。",
+        "strategy": "重要对话选一对一、双方都放松的时间；群里只聊轻松的。",
+        "taboo": "不要当众逼问关系定位——旁观者在场，对方只会防御。",
+        "persona_effectiveness": "高边界、回避型尤其明显。",
+        "rec_tips": ["重要谈话一对一进行"],
+        "forb_tips": ["当众逼问关系定位"],
+        "tasks": ["下次要谈重要话题前，主动约一对一的时间和场景（基于旁观者效应）"],
+        "match": _m(attach_in=("avoidant", "fearful")),
+    },
+    {
+        "id": "butterfly_effect",
+        "name": "蝴蝶效应（关系版）",
+        "category": "沟通",
+        "definition": "关系初期一个微小动作（一次失约/一句贬低）会被长期放大。",
+        "scenario": "初识期（stage≤2）——你以为小事无所谓，其实都在打底。",
+        "strategy": "初期对小事格外认真：守时、不失言、回复稳定；因为早期的每个信号权重都极高。",
+        "taboo": "不要在初识期放纵自己的坏脾气——它的代价比你想的大。",
+        "persona_effectiveness": "初识期普适；对高敏感/焦虑型权重更高。",
+        "rec_tips": ["初期对小事格外认真"],
+        "forb_tips": ["初识期放纵坏脾气"],
+        "tasks": ["列出初识期你答应过的所有小事，本周逐一兑现（基于蝴蝶效应）"],
+        "match": _m(stage_le=2),
+    },
+]
+
+
+# ---------------------------------------------------------------------- #
+# v3.0 第三轮补全：高价值效应 + Gottman 体系（追加，原 61 条不改动）
+# ---------------------------------------------------------------------- #
+def _stage_ge(n: int):
+    """生成 stage >= n 的匹配谓词。"""
+    def _pred(dims: dict, persona: dict, stage: int) -> bool:
+        return stage >= n
+    _pred.__doc__ = f"match(stage>={n})"
+    return _pred
+
+
+def _gottman_5to1_match(dims: dict, persona: dict, stage: int) -> bool:
+    """冲突为竞争/逃避型，或画像中积极消极比低于 5:1 时触发。"""
+    if dims.get("conflict") in ("competing", "avoiding"):
+        return True
+    pnr = (persona or {}).get("positive_negative_ratio") or {}
+    try:
+        r = float(pnr.get("ratio", 999))
+    except (TypeError, ValueError):
+        r = 999.0
+    return r < 5.0
+
+
+LAWS.extend([
+    # ===================== 高价值效应类（搜索补全） ===================== #
+    {
+        "id": "matthew_effect",
+        "name": "马太效应（恋爱版）",
+        "category": "关系动力",
+        "definition": "投入越多的人越不容易被珍惜，越有自我框架、不单方面过度付出的人吸引力反而越高；关系里强者越强、弱者越弱。",
+        "scenario": "你单方面不断加投入（秒回/主动/迁就），对方反而越来越淡；你越围着TA转，TA越觉得你唾手可得。",
+        "strategy": "投资平衡：把投入降到与对方对等，把注意力收回自己的生活；引导对方也为关系投入时间/精力/情感，而不是你一个人扛。",
+        "taboo": "不要走向另一个极端——谁也不付出、冷脸博弈；那不是马太效应的正确用法，是把关系冻死。",
+        "persona_effectiveness": "用户超额投入(user_overinvest)时最相关；焦虑型高发。",
+        "rec_tips": ["把投入降到与对方对等，收回注意力到自己生活"],
+        "forb_tips": ["单方面过度投入刷存在感"],
+        "tasks": ["本周把主动联系次数降到与对方基本对等，多余精力投回自己的工作或爱好（基于马太效应）"],
+        "match": _m(invest_over=True),
+    },
+    {
+        "id": "business_card_effect",
+        "name": "名片效应",
+        "category": "互动策略",
+        "definition": "主动亮出与对方相似的态度、价值观或经历，像递上一张'我们是同类'的名片，能快速拉近距离、加速信任。",
+        "scenario": "初识期（stage≤3）聊天——还在找话题时，主动提及'我也喜欢XX''我也觉得XX'，比空泛搭讪更快建立好感。",
+        "strategy": "在真实交集上主动共振：发现双方真实的共同经历或观点时明确说出来（'原来你也这样，我还以为只有我'），制造被理解的同类感。",
+        "taboo": "不要假装相似去迎合——为讨好编造共同爱好，被识破一次信任直接清零。",
+        "persona_effectiveness": "初识期普适；社交经验少的用户最需要这个破冰动作。",
+        "rec_tips": ["在真实交集上主动说'我也是这样'"],
+        "forb_tips": ["编造共同爱好假装同类"],
+        "tasks": ["本周聊天中找到一个你们真实的共同点，主动说一次'我也是这样'，观察对方反应（基于名片效应）"],
+        "match": _m(stage_le=3),
+    },
+    {
+        "id": "birdcage_logic",
+        "name": "鸟笼逻辑",
+        "category": "关系推进",
+        "definition": "给关系预设一个框架（'我们这种关系会一起做饭/一起过周末'），对方会不自觉地往这个框架里填行为。",
+        "scenario": "关系推进期（stage 3-6）——想从线上聊推进到有共同生活感，但每次约会都很例行公事。",
+        "strategy": "用'我们这种关系会一起XX'的表述预设共同框架：'周末一起去试那家新店吧，反正我们这种关系也该一起吃饭了'，让对方自然进入共同活动。",
+        "taboo": "不要用框架去操控对方做不情愿的事（'你就该……'）；框架是邀请，不是绑架。",
+        "persona_effectiveness": "关系推进期普适；对回避型要轻，别一上来就套同居这种大框架。",
+        "rec_tips": ["用'我们这种关系会一起XX'预设共同框架"],
+        "forb_tips": ["用'你就该……'式框架绑架对方"],
+        "tasks": ["本周用一句'我们这种关系会一起XX'自然地邀请一次共同活动（基于鸟笼逻辑）"],
+        "match": _m(stage_in=(3, 4, 5, 6)),
+    },
+    {
+        "id": "complementarity_law",
+        "name": "互补定律",
+        "category": "关系维护",
+        "definition": "性格/需求互补的人容易产生强烈吸引——相似带来舒适，互补带来成长和完整感。",
+        "scenario": "长期关系——一个果断一个谨慎、一个外向一个内向，差异不是矛盾源，而是互补点。",
+        "strategy": "识别双方的互补点：对方擅长的正好是你缺的，主动欣赏并借力（'你做决定比我果断，这事听你的'），把差异变成团队分工感。",
+        "taboo": "不要把互补固化成'你负责赚钱我负责貌美'的刻板分工；互补是弹性配合，不是角色牢笼。",
+        "persona_effectiveness": "长期关系普适；与相似吸引效应并列——相似打底、互补增色。",
+        "rec_tips": ["欣赏对方与你互补的长处并主动借力"],
+        "forb_tips": ["把互补固化成刻板性别分工"],
+        "tasks": ["写下对方一个'正好补你短板'的特质，本周真诚感谢一次（基于互补定律）"],
+        "match": _m(always=True),
+    },
+    {
+        "id": "interpersonal_attraction",
+        "name": "人际吸引律",
+        "category": "关系理论",
+        "definition": "人际吸引有6种机制：接近吸引（物理/心理接近）、互补吸引、对等吸引（你喜欢我我就喜欢你）、诱发吸引（特定情境唤起）、光环吸引（一好百好）、重复吸引（熟悉产生喜欢）。",
+        "scenario": "所有阶段——判断当前关系主要靠哪种吸引在撑，就知道该强化什么。",
+        "strategy": "识别当下关系里哪种吸引在主导：是聊得来（相似）、被需要（对等）、还是情境（吊桥）？有意识地强化主导项，补最弱项。",
+        "taboo": "不要混淆吸引类型用错方法——靠情境唤起开始的关系，不补相似感，激情退了就散。",
+        "persona_effectiveness": "普适；是相似/互补/曝光/吊桥/互惠/晕轮等吸引类定律的总纲。",
+        "rec_tips": ["识别当前关系主导的吸引机制并针对性强化"],
+        "forb_tips": [],
+        "tasks": ["给当前关系的6种吸引各打个分，找出最弱的一种本周补一次（基于人际吸引律）"],
+        "match": _m(always=True),
+    },
+
+    # ===================== Gottman 体系补全 ===================== #
+    {
+        "id": "gottman_5to1_ratio",
+        "name": "Gottman 5:1比率",
+        "category": "Gottman体系",
+        "definition": "Gottman 30年研究：稳定幸福关系中，冲突时积极:消极互动≥5:1，日常≥20:1；低于5:1是离婚预测指标（离婚夫妻约0.8:1）。",
+        "scenario": "冲突风格为竞争/逃避，或画像中积极消极比偏低时。",
+        "strategy": "每次批评/冲突后，有意识补5次真诚积极互动（赞美/感谢/拥抱/幽默/关心），把比率拉回健康线。",
+        "taboo": "不要机械地'数次数'凑比率——敷衍的'你真棒'不算积极互动，要真诚。",
+        "persona_effectiveness": "竞争型/逃避型冲突画像最需要；是关系稳定性最强预测指标之一。",
+        "rec_tips": ["每次冲突后补5次真诚积极互动"],
+        "forb_tips": ["敷衍凑数式赞美"],
+        "tasks": ["复盘最近一次吵架，列出之后的积极互动次数，不足5次就本周补上（基于Gottman 5:1比率）"],
+        "match": _gottman_5to1_match,
+    },
+    {
+        "id": "emotional_bids",
+        "name": "情感投标理论",
+        "category": "Gottman体系",
+        "definition": "对方发出的每个连接请求（小到'你看那只鸟'）都是一次'情感投标'；'转向'(turn toward)响应率86%=幸福夫妻，33%=离婚夫妻。",
+        "scenario": "所有阶段，尤其关系冷淡/已读不回——对方随口分享一句，你在刷手机嗯了一声，那就是一次'转向别处'。",
+        "strategy": "识别对方的情感投标（分享/提问/求助/表达感受），放下手上的事用'转向'回应：展开话题、表达好奇、追问一个细节。",
+        "taboo": "不要把对方的投标当成打扰——那是TA在伸手要连接；忽略投标，TA迟早不再伸手。",
+        "persona_effectiveness": "普适；比5:1比率更基础，是情感账户的最小存取单元。",
+        "rec_tips": ["对方分享时放下事，展开话题回应"],
+        "forb_tips": ["把对方的分享当敷衍的打扰"],
+        "tasks": ["本周练习把对方随口分享的1件事，认真追问一个细节而不是'嗯'过去（基于情感投标理论）"],
+        "match": _m(always=True),
+    },
+    {
+        "id": "love_maps",
+        "name": "爱情地图理论",
+        "category": "Gottman体系",
+        "definition": "对伴侣内心世界的了解程度（情绪/兴趣/恐惧/希望/日常/压力源）；爱情地图越详细关系越稳固——这是Gottman爱情大厦的地基。",
+        "scenario": "关系稳定期/长期关系——以为'我已经很了解TA'，其实TA最近的压力、喜好已经变了。",
+        "strategy": "定期更新爱情地图：主动问并记住TA最近的烦心事、期待、恐惧、新喜好，不要停留在旧印象。",
+        "taboo": "不要以为'老夫老妻不用再了解'——人是会变的，地图不更新就会过时。",
+        "persona_effectiveness": "长期关系普适；是友谊与共享意义两层的地基。",
+        "rec_tips": ["主动询问并记住TA最近的压力与期待"],
+        "forb_tips": ["凭旧印象对待已经变化的对方"],
+        "tasks": ["本周问对方一个'你最近有什么压力或期待'的问题，并记下答案（基于爱情地图理论）"],
+        "match": _stage_ge(4),
+    },
+    {
+        "id": "sound_relationship_house",
+        "name": "爱情大厦理论（SRH九组件）",
+        "category": "Gottman体系",
+        "definition": "Gottman的Sound Relationship House：爱情地图（地基）→友谊→赞赏与感激→积极视角→冲突管理→亲密/性生活→共享意义→信任与承诺（屋顶），九层构成健康关系。",
+        "scenario": "关系评估场景/长期关系——整体还行但说不出哪里不对，其实是某一层塌了。",
+        "strategy": "用九组件逐层自评，找到最薄弱的那一层针对性加强，而不是平均用力。",
+        "taboo": "不要只盯着一层（只看性或只看钱）——大厦是整体结构，一层塌了整栋都晃。",
+        "persona_effectiveness": "长期关系普适；是Gottman体系的总框架。",
+        "rec_tips": ["用九组件自评找最薄弱层并补强"],
+        "forb_tips": ["只盯一个维度忽略整体"],
+        "tasks": ["给SRH九组件逐层打分，选出最薄弱的一层本周行动一次（基于爱情大厦理论）"],
+        "match": _m(always=True),
+    },
+
+    # ===================== 搜索补全：认知/情绪/沟通类 ===================== #
+    {
+        "id": "forbidden_fruit_effect",
+        "name": "禁果效应（逆反心理）",
+        "category": "认知偏差",
+        "definition": "越是被禁止、被限制的东西越有诱惑力——单方面禁止会激起对方更强的探索欲和逆反。",
+        "scenario": "焦虑型——你越查岗、越禁止TA和异性来往、越逼TA报备，TA反而越想偷偷联系。",
+        "strategy": "把'禁止/监控'换成'表达需求+尊重边界'：不说'不许你和TA聊'，而说'我会有点在意，我们聊聊彼此的底线好吗'。",
+        "taboo": "用'我都是为你好'去限制对方正常社交：禁止本身会把那段关系变成禁果、点燃逆反。",
+        "persona_effectiveness": "焦虑型最常用也最反噬；与罗密欧朱丽叶效应呼应——外部禁止点燃假性激情。",
+        "rec_tips": ["把禁止监控换成表达需求+商量底线"],
+        "forb_tips": ["用禁止或查岗限制对方正常社交"],
+        "tasks": ["本周把一句'你不许……'换成'我会在意，我们聊聊底线'，观察对方反应（基于禁果效应）"],
+        "match": _m(attach_in=("anxious",)),
+    },
+    {
+        "id": "white_bear_effect",
+        "name": "白熊效应（反弹效应）",
+        "category": "情绪管理",
+        "definition": "越刻意压抑、越想忘掉某个念头，它越反弹地涌回来——'别想白熊'反而满脑子白熊。",
+        "scenario": "失恋/分手后——你逼自己'别想了、删掉一切'，结果越压制回忆越清晰；或睡前逼自己别乱想反而失眠。",
+        "strategy": "不对抗念头，允许它自然流过：想TA时不评判自己，把注意力拉回当下的具体事（呼吸/手头工作），念头会自己衰减。",
+        "taboo": "用'删除一切/绝不许想'硬压：压制本身就是在反复强化那个念头，反刍更严重。",
+        "persona_effectiveness": "焦虑型/刚结束关系者最常见；是反刍思维的机制。",
+        "rec_tips": ["允许念头流过，把注意力拉回当下"],
+        "forb_tips": ["强行压抑'别想了'"],
+        "tasks": ["下次忍不住想TA时，不评判自己，做5次深呼吸把注意力拉回手头事（基于白熊效应）"],
+        "match": _m(attach_in=("anxious",)),
+    },
+    {
+        "id": "pratfall_effect",
+        "name": "出丑效应（仰巴脚效应）",
+        "category": "互动策略",
+        "definition": "精明而偶尔犯点小错的人，比完美无缺的人更讨人喜欢——无伤大雅的小笨拙让人觉得真实、可亲。",
+        "scenario": "约会/初识期——你把自己包装得滴水不漏、完美无缺，对方反而觉得有距离、不真实。",
+        "strategy": "不必端着：自然暴露无伤大雅的小笨拙（'我路痴又走错了''这个我真不会'），反而让人觉得真实可亲。",
+        "taboo": "不要为了'出丑'而故意出大糗或一味自我贬低——那是降低价值不是亲和；小缺点要建立在能力感之上。",
+        "persona_effectiveness": "初识到暧昧期普适；高自尊者尤其吃'真实'这一套。",
+        "rec_tips": ["自然暴露无伤大雅的小笨拙"],
+        "forb_tips": ["故意出大糗或一味自我贬低"],
+        "tasks": ["本周在轻松场合自然自嘲一个小缺点或小失误，观察对方是否更放松（基于出丑效应）"],
+        "match": _m(stage_in=(2, 3, 4, 5)),
+    },
+    {
+        "id": "barnum_effect",
+        "name": "巴纳姆效应",
+        "category": "认知偏差",
+        "definition": "人容易相信笼统、泛化的人格描述'说的就是我'——星座、算命、泛泛性格标签特别有市场。",
+        "scenario": "所有阶段——你用'你就是典型处女座''你这种人都……'来判断对方，或被几句泛泛夸奖打动。",
+        "strategy": "去泛化：判断一个人要看TA具体说过什么、做过什么，而不是星座/MBTI标签；也警惕几句'好懂你'就上头。",
+        "taboo": "不要用笼统标签（'你就是花心''你天生冷淡'）去定义对方——那是巴纳姆陷阱，不是真实观察。",
+        "persona_effectiveness": "普适；低自我分化者最容易被泛化描述带跑。",
+        "rec_tips": ["用具体行为代替星座或标签判断对方"],
+        "forb_tips": ["用笼统人格标签定义对方"],
+        "tasks": ["把最近一个你贴给对方的笼统标签，换成'TA上周具体做过的一件事'来描述（基于巴纳姆效应）"],
+        "match": _m(always=True),
+    },
+    {
+        "id": "labeling_effect",
+        "name": "贴标签效应",
+        "category": "认知偏差",
+        "definition": "人被贴上某个标签后，会不自觉让行为去符合标签——'你就是懒/你就是花心'会被自我实现。",
+        "scenario": "冲突中——你气头上说'你从来都自私''你就是改不了'，对方听多了就真的往那靠。",
+        "strategy": "对事不对人：批评具体行为（'这件事你忘了'），不贴人格标签（'你就是不靠谱'）；也不给自己贴'我就是不会谈恋爱'。",
+        "taboo": "不要把标签当狠话甩——标签会被对方内化成自我认知，关系里越贴越糟。",
+        "persona_effectiveness": "竞争型冲突最常见；长期互相贴标签会侵蚀自我价值感。",
+        "rec_tips": ["批评具体行为，不贴人格标签"],
+        "forb_tips": ["气头上给对方贴人格标签"],
+        "tasks": ["本周把一句'你就是XX'改成'这件事你XX了，我们怎么改'（基于贴标签效应）"],
+        "match": _m(conflict_in=("competing",)),
+    },
+    {
+        "id": "overlimit_effect",
+        "name": "超限效应",
+        "category": "沟通",
+        "definition": "刺激过多、过强、过久，会引起极不耐烦甚至逆反——同一句话反复说，效力递减反增。",
+        "scenario": "焦虑型/唠叨——一件事你翻来覆去讲、道歉道个没完，对方从愧疚变烦躁，最后直接关闭。",
+        "strategy": "说一次、说清楚、然后停：重要的事平静地讲一遍，给对方行动空间，不反复追加；错了也简短道歉一次即可。",
+        "taboo": "不要把'为你好'变成念经——同一件事说三遍以上，对方听到的只剩压迫。",
+        "persona_effectiveness": "焦虑型最常见；回避型对超限刺激直接关闭。",
+        "rec_tips": ["重要的事平静说一次，然后停"],
+        "forb_tips": ["同一件事反复唠叨或反复道歉"],
+        "tasks": ["本周选一件你想反复说的事，只平静讲一遍，忍住不追加（基于超限效应）"],
+        "match": _m(attach_in=("anxious",)),
+    },
+    {
+        "id": "transparency_illusion",
+        "name": "透明度错觉",
+        "category": "沟通",
+        "definition": "我们高估自己被别人理解的程度，也高估自己理解别人的程度——'TA应该懂我'通常是错觉。",
+        "scenario": "所有阶段——你心里委屈但不说，默认'TA应该看出来'；或你以为读懂了TA，其实会错意。",
+        "strategy": "把期待说出口：不要等对方猜（'我今天其实有点难过，想被关心一下'）；重要感受直接表达，不玩'你猜'。",
+        "taboo": "不要把'爱我就该懂我'当标准——没人能准确读心，憋着不说最后只会怨对方。",
+        "persona_effectiveness": "普适；回避型/高自尊者尤其容易犯'我不说你也该懂'。",
+        "rec_tips": ["把期待和感受直接说出口，不等人猜"],
+        "forb_tips": ["默认'爱我就该懂我'而不说"],
+        "tasks": ["本周把一个你'希望TA懂但没说'的需求直接说一次（基于透明度错觉）"],
+        "match": _m(always=True),
+    },
+    {
+        "id": "sour_grapes_effect",
+        "name": "酸葡萄甜柠檬效应",
+        "category": "认知偏差",
+        "definition": "得不到就说它不好（酸葡萄），得到了就夸大它的好（甜柠檬）——一种自我安慰式的合理化。",
+        "scenario": "你明知这段关系不对，却说服自己'其实也没那么糟''下一个还不一定有TA好'，以此留下来。",
+        "strategy": "区分'真实满意'和'合理化'：写下这段关系的客观事实（不是'其实也还行'），对照你真正的需求，看是真满足还是自我安慰。",
+        "taboo": "不要用酸葡萄甜柠檬麻痹自己——合理化不会改变糟糕关系的真实代价。",
+        "persona_effectiveness": "NPD/糟糕关系中的受害者高发；与认知失调、沉没成本配套出现。",
+        "rec_tips": ["用客观事实区分真实满意与合理化"],
+        "forb_tips": ["用'下一个更差'麻痹自己留下"],
+        "tasks": ["写下'我留下来的3个客观理由'和'其实也还行'背后压下去的不满，对照看（基于酸葡萄甜柠檬效应）"],
+        "match": _m(npd=True),
+    },
+    {
+        "id": "cold_hot_water_effect",
+        "name": "冷热水效应（预期管理）",
+        "category": "互动策略",
+        "definition": "人的感受随参照标准变化——先放冷水再进温水觉得热，先放热水再进同温水觉得凉；预期管理决定满意度。",
+        "scenario": "初识到暧昧期——一上来期待值拉满，后面正常表现都像'变冷'；适当先压低预期反而让加分更容易。",
+        "strategy": "管理预期：不把话说满（不承诺'以后天天对你好'），把惊喜留到兑现时；做得比承诺多一点点，满意度自然上来。",
+        "taboo": "不要故意先泼冷水制造落差——那是消耗信任，不是预期管理。",
+        "persona_effectiveness": "初识期普适；与阿伦森效应（越来越好）配合使用。",
+        "rec_tips": ["不把话说满，兑现时比承诺多一点"],
+        "forb_tips": ["先泼冷水制造落差"],
+        "tasks": ["本周把一句过满的承诺收一点，然后实际多做一点点，观察对方感受（基于冷热水效应）"],
+        "match": _m(stage_in=(2, 3, 4)),
+    },
+    {
+        "id": "psychological_pendulum",
+        "name": "心理摆效应",
+        "category": "情绪管理",
+        "definition": "情感强度越高，越容易向相反方向摆荡——热恋时多上头，激情退后的失落就有多强烈。",
+        "scenario": "关系升温期（stage 3-6）——开始天天高强度甜蜜，热度一降你就慌'TA是不是不爱我了'。",
+        "strategy": "主动把情绪幅度调平：热恋时不全押上去，保留自己的节奏；回落时告诉自己这是正常摆荡，不是感情变质。",
+        "taboo": "不要在摆荡到低谷时逼问'你怎么变了'——那是把自然回落当成危机。",
+        "persona_effectiveness": "焦虑型最受摆荡影响；早期高强度关系更易出现落差。",
+        "rec_tips": ["热恋时留节奏，回落时知道是正常摆荡"],
+        "forb_tips": ["情绪一回落就逼问'你怎么变了'"],
+        "tasks": ["下次感觉对方'没那么热了'时，先告诉自己这是心理摆荡，观察3天再判断（基于心理摆效应）"],
+        "match": _m(stage_in=(3, 4, 5, 6)),
+    },
+    {
+        "id": "two_watches_effect",
+        "name": "手表定律",
+        "category": "关系维护",
+        "definition": "拥有两块以上走时不一的手表，反而无法确认准确时间——标准越多，越不知道该信哪个。",
+        "scenario": "所有阶段——你拿网上的完美爱情标准、前任的样子、朋友的感情、影视剧一起对比眼前这个人，越比越不满意。",
+        "strategy": "定一把属于你们的尺：只问'我和TA在一起时真实的状态好不好'，不拿外部模板套；关掉'别人家对象'的参照。",
+        "taboo": "不要用多个相互矛盾的标准审判一个人——那不是高标准，是自寻烦恼。",
+        "persona_effectiveness": "普适；信息过载/爱刷情感内容的用户尤其需要。",
+        "rec_tips": ["只用'我和TA真实相处的状态'这一把尺"],
+        "forb_tips": ["拿影视剧/前任/网上标准同时对比"],
+        "tasks": ["写下你现在用来衡量这段关系的'多块手表'，本周只留'我真实感受'这一把（基于手表定律）"],
+        "match": _m(always=True),
+    },
+    {
+        "id": "coolidge_effect",
+        "name": "古烈治效应（喜新厌旧）",
+        "category": "关系维护",
+        "definition": "人对重复刺激的反应会递减——长期关系里激情自然衰减，这是生物性不是爱消失了；需要靠共同新体验重新激活。",
+        "scenario": "长期关系（stage≥6）——在一起久了感觉平淡，误以为是不爱了。",
+        "strategy": "用共同的新体验对抗新鲜感递减：一起做从没做过的事（新地方/新爱好/新节奏），让大脑重新获得唤起，而不是换人找刺激。",
+        "taboo": "不要用不断换人/出轨来追求新鲜——每次都从头开始，永远停不下来。",
+        "persona_effectiveness": "长期关系普适；与Aron自我扩展、新鲜感维度同源。",
+        "rec_tips": ["用共同新体验重新激活新鲜感"],
+        "forb_tips": ["靠换人或出轨追求新鲜"],
+        "tasks": ["本周和对方一起做一件两人都没做过的事（新餐厅/新运动/新路线）（基于古烈治效应）"],
+        "match": _m(stage_in=(6, 7, 8, 9, 10)),
+    },
+])
+
+
+# ====================================================================== #
+# v3.0 第四轮补全：危险效应（识别/预防/特定条件慎用）+ 重审收录
+#
+# 核心原则：危险的东西不是没用，只是没用到该用的地方。
+#   - 维特/煤气灯/斯德哥尔摩 = 主要应用场景为识别 + 预防；同时如实列出反向使用的代价；
+#   - 鲶鱼 = 条件门控下的可用手段，列出适用条件与不适用条件对应的可预见效果；
+#   - 每条带 usage_boundary（使用边界）：条件-效果-代价；category 标注风险等级。
+# （原 82 条不改动，本块纯追加）
+# ====================================================================== #
+
+# 自伤/轻生风险关键词（与 consult_engine 安全拦截对齐），
+# 用于检测"对方消息"中是否出现自伤/轻生/绝望表达，触发维特效应。
+SELF_HARM_TEXT_KEYWORDS: tuple[str, ...] = (
+    "不想活", "活着没意思", "活不下去", "不想活了", "轻生",
+    "自残", "割腕", "跳楼", "自杀", "伤害自己", "伤自己", "自我了断",
+    "活着没意义", "没有活下去的动力", "不如死了", "一了百了",
+)
+
+
+def detect_self_harm_risk(text: str) -> dict:
+    """检测文本（对方消息）是否含自伤/轻生/绝望表达。
+
+    供编排器在对方发来相关表达时调用，结果写入 persona['self_harm_risk']，
+    从而触发维特效应（识别+预防）。若用于诱导/暗示自伤，会显著加剧对方自伤风险。
+
+    Returns:
+        {"detected": bool, "level": "none/medium/high", "hits": [命中词...]}
+    """
+    if not text:
+        return {"detected": False, "level": "none", "hits": []}
+    hits = [kw for kw in SELF_HARM_TEXT_KEYWORDS if kw in text]
+    if not hits:
+        return {"detected": False, "level": "none", "hits": []}
+    strong = any(kw in text for kw in
+                 ("自杀", "自残", "割腕", "跳楼", "自我了断", "不如死了", "一了百了"))
+    return {"detected": True, "level": "high" if strong else "medium", "hits": hits}
+
+
+# ---- 危险效应专用匹配谓词（直接读 persona，数据驱动、可门控） ---- #
+def _werther_match(dims: dict, persona: dict, stage: int) -> bool:
+    """对方消息检测出自伤/轻生风险 → 触发。"""
+    sh = (persona or {}).get("self_harm_risk") or {}
+    return bool(sh.get("detected"))
+
+
+def _gaslight_match(dims: dict, persona: dict, stage: int) -> bool:
+    """高欺骗风险，或防御性沟通出现'否定现实/扭曲事实'模式 → 触发识别。"""
+    if dims.get("deception_high"):
+        return True
+    psych = (persona or {}).get("psychology") or {}
+    defensive = psych.get("defensive_communication") or {}
+    try:
+        score = float(defensive.get("否定现实", 0)) + float(defensive.get("扭曲事实", 0))
+    except (TypeError, ValueError):
+        score = 0.0
+    return score >= 2
+
+
+def _stockholm_match(dims: dict, persona: dict, stage: int) -> bool:
+    """关系动力学标记创伤性联结，或 NPD 关系中受害方反而维护加害方 → 触发识别。"""
+    rd = (persona or {}).get("relationship_dynamics") or {}
+    if rd.get("traumatic_bonding"):
+        return True
+    return bool(dims.get("npd_triggered")) and bool(rd.get("defends_abuser"))
+
+
+def _catfish_match(dims: dict, persona: dict, stage: int) -> bool:
+    """鲶鱼效应严格门控：
+    关系停滞 + 对方安全型/疏离型 + 非焦虑/恐惧 + 非冲突期 + 非NPD/BPD急性期。
+    任一条件不满足即不触发。
+    """
+    persona = persona or {}
+    rd = persona.get("relation_status")
+    stagnant = (str(rd).lower() == "stagnant") or bool(persona.get("_orchestrator_stagnation"))
+    if not stagnant:
+        return False
+    att = dims.get("attachment")
+    if att not in ("secure", "avoidant"):      # 排除 anxious/fearful（触发抛弃恐慌）
+        return False
+    if dims.get("npd_triggered"):               # NPD/BPD 急性期不用
+        return False
+    if dims.get("conflict") == "competing":     # 冲突期不用
+        return False
+    return True
+
+
+LAWS.extend([
+    # ===================== 危险效应：识别/预防 ===================== #
+    {
+        "id": "werther_effect",
+        "name": "维特效应（自杀模仿效应）",
+        "category": "危险效应（识别/预防）",
+        "definition": "公开报道或身边人的自伤/自杀事件会触发模仿传染（1774年《少年维特之烦恼》出版后多地出现模仿自杀，故称维特效应）。",
+        "scenario": "对方消息中出现自伤/轻生/绝望表达时——此时最高优先级是'人'，不是'策略'。",
+        "strategy": "识别+预防（主要应用场景）：立刻把话题从'感情问题'转向'人本身'，温和明确地表达关心，减少对方接触极端内容，并强烈建议引导其联系心理援助热线或医院心理科；你不是专业人员，不建议独自'开导到没事'。若反向用于诱导/暗示/要挟：会显著加剧对方自伤风险（严重后果）。",
+        "taboo": "若用'以退为进/制造危机感'话术：会把对方往危险方向推；若轻视（'你就是说说而已'）：会错失干预窗口、自伤风险继续升高。",
+        "persona_effectiveness": "对方流露自伤念头时无差别适用，与依恋类型无关；这是最高优先级安全信号，高于一切恋爱策略。",
+        "usage_boundary": "主要应用场景：识别风险与引导专业求助。若用于诱导/暗示/要挟：可能加剧对方自伤风险（严重后果）。识别到风险时建议给出'寻求专业帮助'的明确指引（心理援助热线/就诊）。",
+        "rec_tips": ["对方流露轻生念头时先稳住人、引导专业求助"],
+        "forb_tips": ["用任何话术刺激或要挟对方"],
+        "tasks": ["当对方流露自伤/轻生念头时，停止恋爱策略，温和表达关心并明确建议其拨打心理援助热线/到医院心理科就诊（基于维特效应·安全优先）"],
+        "match": _werther_match,
+    },
+    {
+        "id": "gaslighting_effect",
+        "name": "煤气灯效应",
+        "category": "危险效应（识别）",
+        "definition": "通过否认现实、扭曲事实、反复说'你记错了/是你想多了'，让对方逐渐怀疑自己的认知与记忆，最终失去判断、依赖操控者。",
+        "scenario": "高欺骗风险，或对方反复否认/扭曲已发生的事实、让你怀疑自己时。",
+        "strategy": "识别（主要应用场景）：当对方对你清楚记得的事反复否认、把责任推给你、让你怀疑自己的记忆时，用客观证据（聊天记录/时间线）稳住自己的认知——你的感受和记忆是真实的。若反向使用煤气灯手段：短期可建立心理主导，长期会摧毁对方自我价值感与信任、被识破将引发强烈反弹、关系可能彻底破裂。",
+        "taboo": "若把煤气灯手段反过来用在对方身上（'你记错了，根本没这回事'）：短期建立主导，长期代价是信任崩塌与关系破裂。",
+        "persona_effectiveness": "NPD/控制型常用此术；焦虑型、低自我分化者最容易被带偏。",
+        "usage_boundary": "主要应用场景：识别对方是否在操控你、守住自己的认知。若反向使用：代价如上（信任崩塌、关系破裂）。识别后建议建立可验证的沟通。",
+        "rec_tips": ["用客观记录稳住自己的认知，不被'你记错了'带偏"],
+        "forb_tips": ["用'你记错了/是你想多了'反向操控对方"],
+        "tasks": ["当对方反复否认你清楚记得的事实时，用聊天记录/时间线核对一次，写下客观事实，不被'你记错了'动摇（基于煤气灯效应·识别）"],
+        "match": _gaslight_match,
+    },
+    {
+        "id": "stockholm_syndrome",
+        "name": "斯德哥尔摩综合征（创伤性联结）",
+        "category": "危险效应（识别）",
+        "definition": "在反复的伤害-恩惠交替、控制与依赖并存的关系中，受害方反而对加害方产生情感依赖、甚至维护对方——这是创伤联结（traumatic bonding），不是爱。",
+        "scenario": "关系中存在控制/伤害，但你（或对方）反而在为伤害方辩护、离不开时。",
+        "strategy": "识别（主要应用场景）：当你发现自己在为一个伤害你的人找借口、甚至对外维护TA时，用'事实清单'区分'依赖/习惯'与'被善待'；理解这种依恋是创伤造成的，识别后目标是建立健康边界。若反向利用创伤依赖去绑定对方：短期获得强依附，长期在加深对方心理创伤、被识别后依附可能反转为仇恨或彻底脱离。",
+        "taboo": "若利用这种创伤依赖去'绑定'对方：短期强依附，长期加深创伤、被识别后易反转为仇恨或脱离。",
+        "persona_effectiveness": "NPD/控制型关系中的高发；与认知失调、酸葡萄、沉没成本配套出现。",
+        "usage_boundary": "主要应用场景：识别自己/对方是否陷入创伤性依赖。若利用这种依赖绑定对方：代价如上。识别后建议建立健康边界与专业支持。",
+        "rec_tips": ["用事实清单区分创伤依赖与真实被善待"],
+        "forb_tips": ["利用创伤性依赖绑定对方"],
+        "tasks": ["当你发现自己在为一个伤害你的人辩护时，写下'TA实际伤害我的3个事实'与'我留下来的真实原因'，对照判断（基于斯德哥尔摩效应·识别）"],
+        "match": _stockholm_match,
+    },
+
+    # ===================== 危险效应：特定条件慎用 ===================== #
+    {
+        "id": "catfish_effect",
+        "name": "鲶鱼效应",
+        "category": "危险效应（特定条件慎用）",
+        "definition": "安逸的沙丁鱼群里放进一条鲶鱼，鱼群因被搅动而重新活跃——关系长期停滞、双方过度安逸时，适度的'外部竞争感'能重新激活关系动力。",
+        "scenario": "关系长期停滞、双方陷入惰性，且对方是安全型/疏离型、非冲突期时。",
+        "strategy": "条件可用：自然展示你真实的社交生活（有朋友、有正常往来），让对方意识到你不是'唾手可得'，重新产生一点珍惜感；关键是真实生活的自然外溢，不是演戏。适用条件满足时可能重新激活关系动力；条件不满足时代价如下。",
+        "taboo": "编造虚假追求者：被识破后信任归零；在冲突期使用：激化对立；对焦虑型/恐惧型使用：触发抛弃恐慌、关系加速崩断。",
+        "persona_effectiveness": "对安全型/疏离型（低焦虑）在关系停滞时可能重新激活投入；高焦虑型/恐惧型/BPD/NPD急性期使用，对应代价如上列。",
+        "usage_boundary": "适用条件：关系确实长期停滞 + 对方安全型/疏离型 + 非冲突期 + 非NPD/BPD急性期，以'真实社交圈自然可见'方式轻度使用，可能重新激活投入；任一条件不满足时使用，对应代价如上列。",
+        "rec_tips": ["自然展示真实社交生活，而非故意制造追求者"],
+        "forb_tips": ["编造虚假追求者刺激对方", "对焦虑型/恐惧型用竞争感"],
+        "tasks": ["关系停滞且对方为安全/疏离型时，自然恢复并展示一次你的真实社交活动（不编造假追求者），观察对方是否重新产生珍惜感（基于鲶鱼效应·慎用）"],
+        "match": _catfish_match,
+    },
+
+    # ===================== 重审收录：有独特恋爱应用场景 ===================== #
+    {
+        "id": "memory_reconstruction",
+        "name": "记忆重构效应（证人记忆）",
+        "category": "认知偏差",
+        "definition": "人的记忆不是录像，而是每次回忆时被重新拼装的——极易被暗示、情绪和事后信息篡改；'我记得清清楚楚'往往并不可靠。",
+        "scenario": "冲突中翻旧账——你咬定'TA当时就是这么说的'，其实记忆早已被情绪重构。",
+        "strategy": "翻旧账前先找客观记录（聊天记录）；对'TA肯定就是这意思'保持怀疑，重要分歧用证据说话，不用重构的记忆定罪。",
+        "taboo": "不要拿自己重构的记忆当铁证去压对方——你以为的事实可能只是情绪加工后的版本。",
+        "persona_effectiveness": "竞争型冲突、情绪激动时人人都犯；高神经质者记忆扭曲更明显。",
+        "usage_boundary": "通用识别类：用于校准自己'翻旧账'时的记忆偏差，不用于对付对方。",
+        "rec_tips": ["翻旧账前先用聊天记录核对"],
+        "forb_tips": ["凭'我记得'当铁证压对方"],
+        "tasks": ["下次想翻旧账时，先翻出当时的聊天记录核对，发现记忆有偏差就如实修正（基于记忆重构效应）"],
+        "match": _m(conflict_in=("competing", "avoiding")),
+    },
+    {
+        "id": "quenching_effect",
+        "name": "淬火效应",
+        "category": "关系动力",
+        "definition": "金属加热后急速冷却（淬火）反而更坚硬——关系经历适度的降温/挫折与冷静期后再重新升温，韧性会增强，而非变弱。",
+        "scenario": "一直升温、从未降温的关系，或刚经历小冲突需要冷静时。",
+        "strategy": "适度冷却不是冷战：明确说'我们各自冷静一下，明天再好好聊'，给情绪一个淬火期，再带着理解重新靠近；经历过并修复的小摩擦会让关系更坚韧。",
+        "taboo": "淬火≠冷暴力：不能一言不发消失几天；冷却必须有明确的'什么时候回来聊'的约定。",
+        "persona_effectiveness": "一直热恋无摩擦的关系、回避型关系尤其适用；与南风法则配合（冷却后用温和重新升温）。",
+        "usage_boundary": "通用：用于给冲突设置'有约定的冷静期'；无约定的消失一律按冷暴力处理。",
+        "rec_tips": ["适度冷静期要有'何时回来聊'的约定"],
+        "forb_tips": ["一言不发消失当冷暴力"],
+        "tasks": ["下次冲突时，提议'我们各自冷静到明天晚上再好好聊'，约定时间后再重新沟通（基于淬火效应）"],
+        "match": _m(conflict_in=("competing", "avoiding")),
+    },
+    {
+        "id": "buridan_effect",
+        "name": "布里丹效应（决策瘫痪）",
+        "category": "认知偏差",
+        "definition": "面对多个选项时，人因害怕选错而无限分析、迟迟不行动，最后在纠结中错过所有机会。",
+        "scenario": "反复纠结'TA到底适不适合我''要不要继续''选TA还是选新的'，却一直不行动。",
+        "strategy": "用'最低可行行动'代替无限分析：与其想一个月，不如先做一次低成本的明确沟通/约会，用真实反馈代替脑内推演；60分可行就先动。",
+        "taboo": "不要把'还没想清楚'当成永远不行动的借口——关系是在行动中澄清的，不是在脑子里想清楚的。",
+        "persona_effectiveness": "高自我分化但过度理性者、刚结束关系的纠结者高发。",
+        "usage_boundary": "通用：用于推动'过度分析型'用户行动；不代替重大决定的审慎。",
+        "rec_tips": ["用一次低成本真实行动代替无限脑内分析"],
+        "forb_tips": ["把'还没想清楚'当成永远不行动的借口"],
+        "tasks": ["选一件你纠结了很久的关系决定，本周做一次最低成本的明确行动（约一次谈/一次问），用真实反馈代替脑内推演（基于布里丹效应）"],
+        "match": _m(always=True),
+    },
+    {
+        "id": "long_term_love_neuroscience",
+        "name": "长久爱情神经科学（VTA/尾状核/多巴胺）",
+        "category": "关系理论",
+        "definition": (
+            "长久的爱情不是必然退化成亲情，而是爱情叠加了更深的依恋。"
+            "MRI 研究显示：相守 20 多年的夫妻看到伴侣时，VTA（腹侧被盖区）、"
+            "尾状核、纹状体的激活与热恋期年轻人高度相似——多巴胺奖励系统仍在运行，"
+            "长期伴侣仍把对方当成'特别的奖励'，产生偏爱/心动/牺牲/渴望/陪伴。"
+        ),
+        "scenario": (
+            "长期关系（stage 6-8）：七年之痒、激情衰退、对方说'我们变成亲情了/没感觉了'、"
+            "用户担心'爱情是不是都会消失'、稳定期策略。"
+        ),
+        "strategy": (
+            "1) 反驳'必然变亲情'的认知偏差——那常是放弃者的自我合理化，不是神经规律；"
+            "2) 多巴胺系统可长期维持，关键是持续制造'奖励时刻'：小惊喜、认真回应情感投标、"
+            "把积极互动比维持在 Gottman 5:1 以上；3) '深度依恋'不是激情的对立面，"
+            "而是激情的稳定器，两者可共存；4) 关系质量是后天选择与行为的结果，不是命运安排。"
+        ),
+        "taboo": (
+            "不要用'老夫老妻本来就没感觉了'给自己放弃经营找借口——"
+            "研究恰恰证明长期心动可维持，前提是持续投入奖励时刻；"
+            "也不必靠刻意制造惊险续命，稳定日常中的小积极互动即可。"
+        ),
+        "persona_effectiveness": "对所有依恋类型在长期阶段都适用；对把'变亲情'当分手理由者，可打破其认知偏差。",
+        "usage_boundary": "用于长期/稳定/婚姻阶段的激情维持与'变亲情'认知纠偏；不替代对真实破裂关系的评估。",
+        "rec_tips": ["每周主动制造一个小的'奖励时刻'（惊喜/认真回应/小积极互动）",
+                     "把'我们变成亲情了'当作需要经营的信号，而非终点"],
+        "forb_tips": ["用'爱情必然变亲情'合理化停止经营"],
+        "tasks": [
+            "本周主动制造一个小的奖励时刻（一句走心的肯定/一个小惊喜/认真回应对方一次投标），"
+            "观察多巴胺式心动是否仍在（基于长久爱情神经科学）",
+            "把最近一次'没感觉了'的念头拆开：是对方停止了奖励时刻，还是你停止了制造？"
+        ],
+        "match": _m(stage_in=(6, 7, 8)),
+    },
+    {
+        "id": "social_hierarchy_comm",
+        "name": "社交层级沟通法则（向上/同层/向下）",
+        "category": "沟通策略",
+        "definition": (
+            "人际沟通中，你相对对方处于什么位置，决定了该展示什么、该隐藏什么："
+            "向上（对方占优势）不要展示松弛，同层（地位相当）不要展示刻意努力，"
+            "向下（你占优势）不要展示优越。恋爱中这个位置是动态的，需随状态调整。"
+        ),
+        "scenario": (
+            "判断当前相对位置：对方在上（事业高光/追求者多/情绪主导/你在追）、"
+            "同层（关系稳定/地位相当）、你在上（你事业更好/对方低谷依赖你）。"
+        ),
+        "strategy": (
+            "对方在上→表现重视和认真，不要显得无所谓/松弛，否则被读成不珍惜；"
+            "同层日常→自然松弛，不必刻意证明努力，过度用力反而掉价；"
+            "你在上→共情拉平，不要炫耀优越/打压对方自尊，否则触发对方失衡与回避。"
+            "位置会随情境变化（对方升职、你低谷），沟通姿态要跟着切换。"
+        ),
+        "taboo": (
+            "位置错配是主要风险：对占优势的一方装松弛会被当不在乎；"
+            "同层时刻意讨好显得廉价；对低谷的一方炫耀优越会击碎对方自尊、引发逃离。"
+        ),
+        "persona_effectiveness": "通用：适用于所有关系阶段的日常沟通姿态校准；对高自尊/回避型尤其敏感。",
+        "usage_boundary": "用于沟通姿态的位置校准；不代替具体话术，位置判断需结合近期互动动态。",
+        "rec_tips": ["先判断当前你相对对方的位置，再决定展示松弛还是认真",
+                     "你在上时主动共情拉平，避免炫耀"],
+        "forb_tips": ["对占优势的一方装无所谓", "对低谷的一方展示优越"],
+        "tasks": [
+            "回想最近一次互动：当前你相对对方处于什么位置（上/同层/下）？"
+            "据此调整下次沟通——该认真时认真，该松弛时松弛，该共情时共情（基于社交层级沟通法则）"
+        ],
+        "match": _m(stage_in=(2, 3, 4, 5, 6, 7, 8)),
+    },
+])
+
+
+# ====================================================================== #
+# 策略 → 目的说明（供 StrategyAdvisor 注解推荐技巧用）
+# ====================================================================== #
+LAW_TIP_PURPOSES: dict[str, str] = {
+    "整理首次互动的开场状态": "用一次舒适开场奠定‘相处不累’的基调（首因效应）",
+    "冲突收尾留温和句": "让对方记住的最后体验是温和的，修复后关系更紧密（近因效应）",
+    "自然展现一个真实亮点": "让一个真实优点替你加分，而非面面俱到表演（晕轮效应）",
+    "小承诺连续兑现重建信任基线": "用连续一致的小行动打破一次失信造成的全盘否定（恶魔效应）",
+    "用具体行为记录代替标签判断": "避免被刻板印象误导，看见真实的对方（刻板印象）",
+    "用信任语气代替质问语气": "正向预期会自我实现，质问会亲手逼走对方（皮格马利翁效应）",
+    "识别要求是否在渐进升级": "看穿‘小要求→大要求’的操控升级，守住自己的节奏（登门槛效应识别）",
+    "直接说出真实需求，不玩反差": "健康沟通不需要先提离谱要求（留面子效应识别）",
+    "重大承诺前先看无利益场景表现": "不被‘先甜后索’的低球话术带跑（低球技术识别）",
+    "把投入重心从物质转向共鸣": "避免过度理由效应削弱对方的内在喜欢（过度理由效应）",
+    "用事实清单对抗自我合理化": "打破认知失调，看清‘离不开’是习惯还是爱（认知失调）",
+    "定期自检：去掉惯性后还想继续吗": "用自我知觉区分‘真爱’与‘行为惯性’（自我知觉理论）",
+    "用感受回应身份压迫": "无论对方头衔多高，你的感受值得被尊重（权威效应识别）",
+    "自然展示健康社交联结": "让对方通过‘别人怎么对你’自然形成好感（社会认同）",
+    "具体赞美对方一个细节": "真诚的细节赞美比空泛夸奖更建立连接（喜好原理）",
+    "保持自己生活丰富，不押注对方": "不被稀缺话术制造的紧迫感绑架（稀缺原理识别）",
+    "回礼保持对等，把感谢与要求分开": "健康流动，不欠人情债（互惠原理）",
+    "按自己节奏给承诺，小承诺必兑现": "承诺是信任的结果，不是被推着给的绳套（承诺一致性识别）",
+    "稳定期靠细节而非加码": "避免贝勃定律导致阈值越来越高（贝勃定律）",
+    "识别冷热交替模式，保持自己回应节奏稳定": "看穿间歇性强化操控，自己不玩冷热交替（间歇性强化识别）",
+    "请对方帮一个低难度小忙": "创造健康的双向投入机会（富兰克林效应）",
+    "安排轻度唤醒的共同活动": "让共同活动自然制造心跳，而不是人为惊险（吊桥效应）",
+    "用获得视角替代损失视角做决定": "区分爱与‘怕失去’（损失厌恶）",
+    "区分已投入与未来值得": "不让沉没成本绑架未来（沉没成本效应）",
+    "赞美节奏递进，初期中肯后期具体": "越来越认可比一上来狂夸更可信（阿伦森效应）",
+    "在话题高潮处自然收尾": "让对话有余韵，不是故意吊人（蔡加尼克效应）",
+    "低压力可预测地增加自然出现频率": "用熟悉感慢慢降低回避型的防御（曝光效应）",
+    "把注意力拉回两人本身合不合": "外部阻力给的是假性亲密（罗密欧与朱丽叶效应）",
+    "自检三角并补最短角": "亲密/激情/承诺缺哪补哪（爱情三元论）",
+    "冲突中识别四骑士并用修复尝试替代": "避免批评/蔑视/防御/筑墙侵蚀关系（Gottman四骑士）",
+    "日常有意识存款，取款后当天补": "保持情感账户余额充足（情感账户理论）",
+    "小不适当天温和提出": "不让小裂痕制度化（破窗效应）",
+    "找最低短板集中补一个月": "补最短那块板，水位才涨（木桶效应）",
+    "每周1次高质量互动": "20%关键互动带来80%亲密感（二八定律）",
+    "用准备式放松替代预防式焦虑": "查岗式预防反而制造问题（墨菲定律）",
+    "重要谈话一对一进行": "避开旁观者效应带来的防御（旁观者效应）",
+    "初期对小事格外认真": "早期每个信号权重都极高（蝴蝶效应）",
+    # ---- v3.0 第四轮：危险效应 + 重审收录 ----
+    "对方流露轻生念头时先稳住人、引导专业求助": "自伤风险下安全高于一切策略（维特效应·识别预防）",
+    "用客观记录稳住自己的认知，不被'你记错了'带偏": "识别煤气灯操控，守住自己的现实检验（煤气灯效应·识别）",
+    "用事实清单区分创伤依赖与真实被善待": "识别创伤性联结，看清是依赖还是爱（斯德哥尔摩效应·识别）",
+    "自然展示真实社交生活，而非故意制造追求者": "在严格门控下用真实社交激活停滞关系（鲶鱼效应·慎用）",
+    "翻旧账前先用聊天记录核对": "记忆会被情绪重构，用证据代替脑内翻旧账（记忆重构效应）",
+    "适度冷静期要有'何时回来聊'的约定": "有约定的冷却让关系更坚韧，无约定就是冷战（淬火效应）",
+    "用一次低成本真实行动代替无限脑内分析": "打破决策瘫痪，用反馈代替纠结（布里丹效应）",
+}
+
+# 定律误用警告（注入 forbidden）
+LAW_MISUSE_WARNINGS: dict[str, str] = {
+    "以狠话收尾": "狠话会成为对方对你最近一次互动的全部记忆（近因效应），关系难以回暖",
+    "失信后立刻大礼补偿": "补偿性表演只会再次透支信任，对方需要的是一致（恶魔效应）",
+    "用‘我就知道你会这样’式预判": "负面预言会亲手自我实现，把对方真的推走（皮格马利翁效应）",
+    "因‘只是小忙’就麻木答应": "要求会逐级升级，第一步就是失控的开始（登门槛效应误用）",
+    "先提离谱要求再退到真实要求": "留面子话术被识破后信任清零",
+    "轻信口头大饼": "低球技术：先甜后索，重大承诺前必须看无利益场景表现",
+    "关系出问题时加码送礼": "过度理由效应会把你的爱兑换成价格",
+    "用加倍付出来合理化糟糕关系": "这是在给认知失调追加沉没成本",
+    "用‘我比你懂’压对方": "权威压迫在亲密关系里没有合法性",
+    "伪造社交证明": "买赞摆拍被拆穿就是信任崩塌",
+    "用‘别人追我’刺激对方": "稀缺话术是操控，安全型会直接退出",
+    "用付出绑架对方回报": "人情债是关系毒药",
+    "用‘你都答应了’绑架下一步": "承诺一致性被滥用就是情感勒索",
+    "矛盾期加倍花钱挽回": "贝勃定律下阈值已高，花钱无效且贬值",
+    "故意忽冷忽热吊对方": "间歇性强化是操控；对焦虑型造成真实创伤，对安全型会直接退出关系",
+    "请NPD涉及钱的忙": "富兰克林效应会被NPD反向利用为伤害你的权力",
+    "人为制造惊险逼对方心动": "吊桥效应变成胁迫就违法伦理",
+    "用‘你会失去我’威胁对方": "损失厌恶被武器化就是恐吓",
+    "用付出史要求对方留下": "沉没成本不是对方的债",
+    "先贬后褒戏弄对方": "被识破就是羞辱",
+    "故意不回消息吊对方": "蔡加尼克效应被玩成冷暴力，对焦虑型是伤害",
+    "高频私聊轰炸回避型": "曝光变入侵，触发回避型去激活策略",
+    "拉亲友围攻对方逼表态": "罗密欧与朱丽叶效应把外部阻力当燃料，内部问题加倍反弹",
+    "讽刺翻白眼式蔑视": "Gottman四骑士之首，关系破裂最强预测因子",
+    "把每件小事上升为大审判": "破窗修的是窗，不是拆房子",
+    "查岗翻手机": "墨菲定律：预防式焦虑真的会逼出隐瞒",
+    "当众逼问关系定位": "旁观者在场时对方只会防御",
+    "初识期放纵坏脾气": "蝴蝶效应：初期一个小坏动作会被长期放大",
+    # ---- v3.0 第四轮：危险效应误用警告 ----
+    "用任何话术刺激或要挟对方": "维特效应：自伤风险下任何话术都可能致命，安全第一，立即引导专业求助",
+    "编造虚假追求者刺激对方": "鲶鱼效应一旦演变成欺骗，被拆穿即信任崩塌",
+    "对焦虑型/恐惧型用竞争感": "鲶鱼效应用错对象会触发抛弃恐慌，直接加速关系破裂",
+    "用'你记错了/是你想多了'反向操控对方": "煤气灯效应：这是操控对方认知，会摧毁关系根基",
+    "利用创伤性依赖绑定对方": "斯德哥尔摩：这是在加深对方的心理创伤，不是爱",
+    "凭'我记得'当铁证压对方": "记忆已被情绪重构，你以为的事实可能不是事实",
+    "一言不发消失当冷暴力": "淬火≠冷战，无约定的消失就是冷暴力",
+    "把'还没想清楚'当成永远不行动的借口": "布里丹效应：过度分析本身就是在错过关系",
+}
+
+
+# ====================================================================== #
+# 对外接口
+# ====================================================================== #
+def match_laws(persona: dict, stage: int = 5, dims: Optional[dict] = None) -> list[dict]:
+    """根据画像+关系阶段，返回所有命中的定律（数据驱动匹配）。
+
+    Args:
+        persona: 画像 dict（嵌套或扁平均可）。
+        stage: 关系阶段 0-10。
+        dims: StrategyAdvisor 已提取的 dims（可选）；为 None 时用轻量提取。
+
+    Returns:
+        list[dict]: 命中的定律完整 dict（保持 LAWS 顺序）。
+    """
+    if dims is None:
+        dims = _lightweight_dims(persona)
+    hits: list[dict] = []
+    for law in LAWS:
+        try:
+            if law["match"](dims, persona, stage):
+                hits.append(law)
+        except Exception as e:  # noqa: BLE001 - 单条定律匹配失败不影响整体
+            logger.debug("定律 %s 匹配失败: %s", law.get("id"), e)
+    return hits
+
+
+def build_law_tasks(persona: dict, stage: int = 5,
+                    dims: Optional[dict] = None) -> tuple[str, list[str]]:
+    """根据命中定律，生成任务说明 + 任务标题列表。
+
+    Returns:
+        tuple: (note_str, task_titles)。
+               note 形如 "[心理学定律] 命中3条：间歇性强化识别 / 曝光效应 / 吊桥效应"；
+               task_titles 为可直接交给 TaskEngine 的任务标题（已注明定律）。
+    """
+    hits = match_laws(persona, stage, dims)
+    # 只取有 tasks 的定律；每定律最多贡献1条任务，避免任务爆炸
+    titles: list[str] = []
+    names: list[str] = []
+    for law in hits:
+        if law.get("tasks"):
+            titles.append(law["tasks"][0])
+            names.append(law["name"])
+    if not names:
+        return "", []
+    note = (
+        f"[心理学定律] 命中{len(names)}条："
+        + "、".join(names)
+        + "。定律是理解关系机制+引导健康互动的工具，不是算计对方的手段。"
+    )
+    return note, titles
+
+
+def law_reasoning_lines(hits: list[dict]) -> str:
+    """把命中定律拼成 reasoning 引用行（供 StrategyAdvisor 调用）。"""
+    if not hits:
+        return ""
+    parts = []
+    for law in hits:
+        # 引用定律名 + 一句机制解释
+        parts.append(f"【{law['name']}】{law['strategy']}")
+    return "心理学定律引用：" + "；".join(parts)

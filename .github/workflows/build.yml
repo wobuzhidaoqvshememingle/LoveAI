@@ -1,0 +1,68 @@
+# ============================================================
+# LoveAI 打包构建
+# - 触发: 手动 workflow_dispatch, 或推送 v* tag
+# - 产物: PyInstaller 主程序 dist/LoveAI/, electron-builder 桌宠
+# ============================================================
+name: Build
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - "v*"
+
+jobs:
+  build-windows:
+    name: Windows · PyInstaller + Electron
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Setup Node.js 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: desktop-pet-electron/package-lock.json
+
+      - name: Upgrade pip
+        run: python -m pip install --upgrade pip
+
+      - name: Install main requirements
+        run: python -m pip install -r requirements.txt
+
+      - name: Install gateway requirements
+        run: python -m pip install -r gateway/requirements.txt
+
+      - name: Install PyInstaller
+        run: python -m pip install pyinstaller
+
+      - name: Build Electron desktop pet (npm install && npm run build:win)
+        working-directory: desktop-pet-electron
+        run: |
+          npm install
+          npm run build:win
+
+      - name: PyInstaller main app (LoveAI.spec)
+        run: python -m PyInstaller LoveAI.spec --noconfirm
+
+      - name: Upload main app artifact (dist/LoveAI)
+        uses: actions/upload-artifact@v4
+        with:
+          name: loveai-main-win-x64
+          path: dist/LoveAI/
+          if-no-files-found: error
+
+      - name: Upload desktop pet artifact (desktop-pet-electron/dist)
+        uses: actions/upload-artifact@v4
+        with:
+          name: loveai-desktoppet-win-x64
+          path: desktop-pet-electron/dist/
+          if-no-files-found: warn

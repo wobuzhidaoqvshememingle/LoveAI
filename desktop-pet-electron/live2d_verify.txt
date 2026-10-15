@@ -1,0 +1,239 @@
+============================================================
+ LoveAI 桌宠 Live2D moc3 真渲染实测证据
+ 日期：2026-10-10
+ 路线：C（兜底必做）—— 用现成 haru 模型闭环
+============================================================
+
+【结论】桌宠已成功加载 .moc3 Live2D 骨骼模型（非 PNG 帧），
+窗口透明置顶，Haru 全身完整不裁切；眼跟随/眨眼/呼吸/口型/表情全部实测通过。
+
+------------------------------------------------------------
+一、加载链路（CDP localhost:9225 实测）
+------------------------------------------------------------
+page target: file:///.../renderer/index.html
+[state] {"isLive2D":true,"isImage":false,
+  "viewCtor":"ke" (pixi-live2d-display Live2DModel 压缩类名),
+  "modelConfig":"haru | ../assets/models/haru/Haru.model3.json",
+  "natW":2400,"natH":4500,"scale":0.1227,
+  "viewW":294.4,"viewH":552,"hasInternalModel":true,
+  "pixiLive2dLoaded":true}
+
+Cubism Core 版本日志：
+  [CSM][I]Live2D Cubism Core version: 05.01.0000
+  CubismFramework.startUp()/initialize() complete
+  Live2D Cubism SDK Core Version 5.1.0
+  [model-loader] 模型自然尺寸: 2400 x 4500
+  [model-loader] Live2D 模型加载成功: ../assets/models/haru/Haru.model3.json
+  [app] 桌宠启动完成，当前角色: Haru
+
+stage 子节点（z 序）：
+  [0] atmosphere (ia, 氛围层)
+  [1] Live2DModel (ke, visible=true, alpha=1, pos(202,587), 294x552)
+
+------------------------------------------------------------
+二、窗口 / 透明 / 置顶 / 完整不裁切
+------------------------------------------------------------
+窗口实际尺寸 402x604（dpr=1.25），PIXI 画布 500x750。
+main.js: frame:false, transparent:true, backgroundColor:#00000000, alwaysOnTop, skipTaskbar。
+截图 live2d_shot_default.png：Haru 全身（头->鞋）完整居中显示，未裁切。
+（最初一张"空"截图是 sleep 过渡帧；reload 后默认 _fit() 布局正常。）
+
+------------------------------------------------------------
+三、眼跟随（focusController 实测）
+------------------------------------------------------------
+修复前 bug：model-loader.setLookTarget(-1~1) 误喂给 view.focus()，
+  该方法内部 toModelPosition 按 originalWidth/Height 归一化，
+  期望的是屏幕像素坐标，导致眼神目标被错误换算成 ~-0.7 恒定值。
+修复后：直接写 internalModel.focusController.focus(x,y)。
+
+实测（派发 mousemove 重置 mouseLeaveTimer 后 setLookTarget(0.9,0.3)）：
+  采样 focusController.targetX / 平滑后 x：
+    {"tx":0.9,"x":0.00}
+    {"tx":0.9,"x":0.64}
+    {"tx":0.9,"x":0.89}
+    {"tx":0.9,"x":0.89}  (收敛保持)
+说明：目标 0.9 保持，焦点平滑插值到 ~0.89；
+  库 updateFocus() 会把 x 叠加到 ParamEyeBallX 与 ParamAngleX*30。
+
+------------------------------------------------------------
+四、呼吸（实测）
+------------------------------------------------------------
+breathPhase 随帧推进（PIXI 层呼吸相位）：
+  idle 时 85.85 -> 88.32 -> 88.63 -> 88.99 -> 89.55 -> 90.08 （持续递增）
+内部 ParamBodyAngleX 随 idle motion 变化：
+  -0.11 -> -0.88 -> -0.12 （动作在播）
+库 updateNaturalMovements() 还会叠加内部 breath 参数。
+
+------------------------------------------------------------
+五、口型（setMouthOpen 实测）
+------------------------------------------------------------
+同帧同步读回：
+  setMouthOpen(0.9) -> coreModel.getParameterValueById('ParamMouthOpenY') = 0.899999976
+（写值路径正确。app.js 主循环在 SPEAKING 态用音频振幅驱动口型；
+  IDLE 态每帧重置为 0 是设计行为，非 bug。）
+
+------------------------------------------------------------
+六、眨眼（EyeBlink）
+------------------------------------------------------------
+Haru.model3.json Groups: EyeBlink = [ParamEyeLOpen, ParamEyeROpen]。
+setEyeOpen(0.1) 同帧写 coreModel ParamEyeLOpen/ROpen 成功。
+库 eyeBlink 组在无 motion 时自动驱动眨眼。
+
+------------------------------------------------------------
+七、表情（F01-F08 实测）
+------------------------------------------------------------
+依次 setExpression(happy/surprised/sad/sleeping/idle)，
+  expressionManager 存在（hasEm:true），切换无异常。
+F01中性/F02开心/F03悲伤/F04惊讶/F05生气/F06害羞/F07严肃/F08困倦 均挂载。
+
+------------------------------------------------------------
+八、动作（idle motion）
+------------------------------------------------------------
+Haru.model3.json Motions.Idle = [haru_g_idle, haru_g_m15]，自动循环。
+ParamAngleX/ParamAngleY 随时间变化（-2.98->0.35->0.09）证明 motion 在播。
+
+------------------------------------------------------------
+九、唯一非阻塞报错（预期内）
+------------------------------------------------------------
+[log.error] WebSocket connection to 'ws://localhost:9876/' failed:
+  net::ERR_CONNECTION_REFUSED
+= LoveAI 后端语音桥未启动，app.js 明确"连不上也不阻塞"，不影响 Live2D 渲染。
+
+------------------------------------------------------------
+十、改动清单
+------------------------------------------------------------
+1. config/characters.json: current cybergf -> haru（已备份 .bak）
+2. renderer/js/model-loader.js: 修复 setLookTarget 直写 focusController
+   （已备份 model-loader.js.bak；node --check 通过）
+3. assets/models/haru/Haru.userdata3.json: 补空壳（model3.json 引用但原缺失）
+
+------------------------------------------------------------
+截图证据（同目录）
+------------------------------------------------------------
+live2d_shot_default.png  = 默认布局全身 Haru
+live2d_shot_centered.png = 居中放大确认贴图/五官
+live2d_shot_happy.png    = happy 表情后截图
+============================================================
+
+
+============================================================
+ 路线A：开源女性 moc3 骨架 —— Hiyori 实测（2026-10-10）
+============================================================
+【骨架来源】oh-my-live2d/live2d-models @main
+  模型：Hiyori（Cubism 4 官方女性样例，年轻女性）
+  下载通道：jsdelivr 拉小文件；两张大贴图（1.8MB/2.5MB）jsdelivr/raw 断连，
+    经 ghproxy.net 镜像拉 raw.githubusercontent.com 成功。
+【文件落位】desktop-pet-electron\assets\models\hiyori\
+  Hiyori.moc3 (443648 B)
+  Hiyori.model3.json / .cdi3.json / .physics3.json / .pose3.json / .userdata3.json
+  Hiyori.2048\texture_00.png (1814312 B) / texture_01.png (2504416 B)
+  motions\Hiyori_m01~m10.motion3.json（9 个 Idle + 1 个 TapBody）
+【characters.json】新增 id=hiyori 条目指向 ../assets/models/hiyori/Hiyori.model3.json；
+  current 切为 hiyori（haru / cybergf / placeholder 条目均保留）。
+
+【CDP 实测（干净 npm start 重启后，非热重载）】
+[state] {"isLive2D":true,"model":"hiyori",
+  "path":"../assets/models/hiyori/Hiyori.model3.json",
+  "natW":2976,"natH":4175,"scale":0.1277,"w":380,"h":533,
+  "pos":[199.4,591.4],"alpha":1}
+[mouth] setMouthOpen(0.8) -> ParamMouthOpenY = 0.8000000119
+截图 live2d_shot_hiyori.png：Hiyori 全身（双马尾/米色开衫/蓝领巾/百褶裙/黑袜）
+  完整居中渲染，不裁切，贴图/五官正常。
+
+【参数组覆盖】
+  - LipSync: ParamMouthOpenY（口型）
+  - EyeBlink: ParamEyeLOpen / ParamEyeROpen（眨眼）
+  - 眼跟随: focusController（路线C修复后通用，Hiyori 同样生效）
+  - Idle 9 个 motion 自动循环；TapBody 1 个
+  - 物理摆动 / 呼吸 由库 updateNaturalMovements 提供
+
+【关于"古风女子母版贴图替换"——实事求是，不假装完美】
+  母版（红黑纱裙古风女子纯绿幕半身）要 1:1 贴到 Hiyori 骨骼，
+  需要在 Live2D Cubism Editor 里做 PSD 分层重绘 + UV 重映射
+  （把真人脸/眉/眼/腮红/发片对位到 Hiyori 2048 UV 的离散分层：
+   脸底椭圆/眉/大眼/腮红/耳/发片）。
+  本环境没有 Cubism Editor（路线B 的 PSD2Live 依赖它）；
+  直接把整张照片糊上去会变成"动漫眼睛浮在真人脸上"、且破坏眨眼/眼跟随。
+  故本轮做到的程度：真骨骼女性数字人（Hiyori）在桌宠里真渲染真动；
+  形象贴近度 = 日式校服少女，尚未换成古风真人母版。
+  这是已知差距，明确记录，不是假装完美。
+
+------------------------------------------------------------
+回归测试（venv python）
+------------------------------------------------------------
+tests/test_pet_animator.py + test_pet_animator_frames.py
++ test_pet_mode_setting.py + test_loyalty_pet_bridge.py
+  -> 22 passed in 6.49s（无回归，与基线一致）
+
+改动文件 node --check：renderer\js\model-loader.js 通过。
+未触碰：微信接入相关、boost_glide_planner（只读）。
+cybergf PNG 帧降级路线保留可用（characters.json 条目未删，current 切走即可回切）。
+============================================================
+
+
+============================================================
+ 路线A·国风方向：宁海（Azur Lane 东煌舰娘）实测（2026-10-10）
+============================================================
+【搜索来源与关键词】
+  GitHub 仓库搜索：live2d+hanfu / live2d+古风 / live2d+guofeng / live2d+汉服
+  / live2d+model3+古风 / live2d+模型 / live2d+chinese / live2d+少女+moc3
+  / live2d+古装 / live2d+襦裙 / pixi-live2d-display+古风
+  Gitee 搜索：live2d 古风 / live2d 汉服 / live2d moc3（0 结果）
+  检查仓库：Eikanya/Live2d-model（17GB 游戏素材合集，碧蓝航线/少女前线等）
+  / imuncle/live2d（41 个 moc3，全是碧蓝航线 JP）
+  / oh-my-live2d/live2d-models（10 个官方样例）
+  / hacxy/l2d-models（同 oh-my-live2d）
+  / luyuan-li/apsara（古风桌宠项目，但只打包官方样例）
+
+【结论：开源 CC0/MIT 国风女性 moc3 不存在】
+  全网搜遍，没有找到 CC0/MIT/可商用授权的「汉服/襦裙/古风女性」moc3 模型。
+  原因：
+  1. Live2D 官方样例全是日式角色（Haru/Hiyori/Mao/Mark/Ren/Rice/Natori/Wanko）
+  2. 开源合集里的国风角色全是游戏素材（碧蓝航线东煌阵营等），版权归属游戏公司
+  3. 国风 Vtuber（泠鸢等）模型未开源
+  4. 自制 PSD2Live 需要 Cubism Editor 环境，本环境没有
+
+【最终选择：宁海 ninghai_4（碧蓝航线东煌阵营）】
+  - 来源：imuncle/live2d@master → live2d_3/model/Azue Lane(JP)/ninghai_4/
+  - 形象：紫蓝双马尾 + 熊猫发饰 + 中式元素舰装 + 麦克风（偶像皮肤）
+  - 女性、国风（东煌阵营中式设计）、moc3 完整、参数全
+  - 授权：⚠️ 游戏素材版权（非 CC0/MIT），仅个人本地使用
+  - 文件落位：desktop-pet-electron\assets\models\ninghai\
+    ninghai_4.moc3 (1329152 B)
+    ninghai_4.model3.json / .physics3.json
+    textures\texture_00.png (3076181 B)
+    motions\16 个动作（idle/login/touch_body/touch_head/wedding 等）
+
+【CDP 实测（localhost:9225）】
+[state] {"isLive2D":true,"model":"ninghai",
+  "path":"../assets/models/ninghai/ninghai_4.model3.json",
+  "natW":6000,"natH":5000,"scale":0.0633,"w":380,"h":317,
+  "pos":[197,591],"alpha":1,"visible":true}
+[mouth] setMouthOpen(0.9) -> ParamMouthOpenY = 0.899999976
+[eye-follow] dispatch mousemove + setLookTarget(0.9,0.3)
+  -> focusController.x 收敛到 0.90, y=0.30
+  -> ParamEyeBallX = 0.029（眼神偏移生效）
+[blink] ParamEyeLOpen = 0.87（眨眼中，eyeL 从 1 降到 0.87）
+截图 live2d_shot_ninghai.png：宁海全身完整渲染（紫蓝双马尾/熊猫发饰/
+  中式舰装/麦克风），不裁切，窗口透明置顶。
+
+【参数覆盖】
+  - LipSync: ParamMouthOpenY ✅
+  - 眼跟随: focusController → ParamEyeBallX/ParamAngleX ✅
+  - 眨眼: ParamEyeLOpen/ROpen（motion 驱动）✅
+  - 呼吸/物理: physics3.json ✅
+  - 动作: 16 个 motion（idle 自动循环）✅
+  - 表情: 无独立 expression 表（motion 内驱动）
+
+【已知差距（实事求是）】
+  1. 版权：碧蓝航线游戏素材，非 CC0/MIT，仅个人本地桌宠使用
+  2. 风格：日系动漫风，非"中国人真人感"；非汉服/襦裙，是现代偶像+中式元素
+  3. 与母版（红黑纱裙古风真人）形象贴近度低
+  4. 若需可商用/真人古风形象，需：
+     - 在有 Cubism Editor 的环境做 PSD2Live（路线B）
+     - 或委托画师做国风 Live2D PSD 分层后绑骨
+
+【回归测试】
+  桌宠专项 pytest：22 passed in 5.83s（无回归）
+  characters.json 已备份 .bak；model-loader.js 未改；node --check 通过。
+============================================================

@@ -1,0 +1,1 @@
+﻿{"before":{"expr":"idle","frame":"base"},"happy":{"expr":"happy","frame":"expr_happy"},"think":{"expr":"thinking","frame":"expr_thinking"},"shy":{"expr":"shy","frame":"expr_shy"},"angry":{"expr":"angry","frame":"expr_angry"},"surprised":{"expr":"surprised","frame":"expr_surprised"},"after":{"expr":"idle","frame":"base"}}

@@ -1,0 +1,48 @@
+/* ============================================================
+ * LoveAI-v2 动画相关样式说明
+ *
+ * 注意：Qt Style Sheets (QSS) 不支持 CSS transition / animation 属性。
+ * 所有过渡动画必须在 Python 代码中通过 QPropertyAnimation 实现。
+ * 本文件仅作为注释索引，列出各控件对应的动画实现位置。
+ * ============================================================ */
+
+
+/* ---------- 按钮 hover 过渡效果 ----------
+ * QSS 本身不支持 transition，hover 颜色切换是瞬时的。
+ * 如需平滑过渡，在代码中使用：
+ *
+ *   self._anim = QPropertyAnimation(self, b"styleSheet", self)
+ *   或更推荐：在 enterEvent / leaveEvent 中修改 palette，
+ *   用 QPropertyAnimation 驱动 QGraphicsOpacityEffect 或自定义属性。
+ *
+ * 实际实现参考:
+ *   - gilded_button.py: hover 变色由 QSS 伪状态直接控制（瞬时）
+ *   - 如需平滑过渡，可在按钮 enterEvent 中启动 QPropertyAnimation
+ *     驱动一个自定义 qreal 属性（如 "hoverStrength"），paintEvent 中读取并插值
+ */
+
+
+/* ---------- 闪烁提醒样式 ----------
+ * 使用方式: widget.setObjectName("blinking")
+ * 在代码中用 QPropertyAnimation 控制 windowOpacity 或自定义 opacity 属性：
+ *
+ *   self._blink_anim = QPropertyAnimation(self, b"windowOpacity", self)
+ *   self._blink_anim.setDuration(1000)
+ *   self._blink_anim.setStartValue(1.0)
+ *   self._blink_anim.setEndValue(0.3)
+ *   self._blink_anim.setLoopCount(-1)   # 无限循环
+ *   self._blink_anim.setEasingCurve(QEasingCurve.InOutQuad)
+ *   self._blink_anim.start()
+ *
+ * 停止闪烁:
+ *   self._blink_anim.stop()
+ *   self.setWindowOpacity(1.0)
+ *
+ * 若控件不是顶层窗口，无法用 windowOpacity，请改用
+ * QGraphicsOpacityEffect + QPropertyAnimation 驱动其 opacity 属性。
+ */
+
+QWidget#blinking {
+    /* 仅作占位标记，实际闪烁由代码中的 QPropertyAnimation 控制 */
+    border: 1px solid #f44336;
+}

@@ -1,0 +1,15 @@
+/* LoveAI v3.0 浅色清新风 light.qss */
+QWidget { color: #1a1a2e; background-color: #f7f7fc; font-family: "Microsoft YaHei"; font-size: 14px; }
+QMainWindow, QDialog { background-color: #ffffff; }
+QFrame#panel, QGroupBox { background: #ffffff; border: 1px solid #e0e0f0; border-radius: 12px; }
+QListWidget, QTreeWidget { background:#f2f2fa; border:none; border-radius:8px; }
+QListWidget::item { padding:10px 14px; border-radius:8px; }
+QListWidget::item:selected { background: linear-gradient(90deg,#3b82f6,#a855f7); color:#fff; }
+QPushButton { background: linear-gradient(90deg,#3b82f6,#a855f7); color:#fff; border:none; border-radius:20px; padding:8px 18px; font-weight:bold; }
+QPushButton:hover { background: linear-gradient(90deg,#60a5fa,#c084fc); }
+QPushButton[cssClass="danger"] { background:#ef4444; }
+QLineEdit, QTextEdit, QComboBox { background:#ffffff; border:1px solid #d0d0e0; border-radius:8px; padding:6px; }
+QProgressBar { border:none; border-radius:8px; background:#e8e8f5; height:10px; }
+QProgressBar::chunk { background: linear-gradient(90deg,#3b82f6,#a855f7); border-radius:8px; }
+QScrollBar:vertical { width:8px; background:transparent; }
+QScrollBar::handle:vertical { background:#c0c0e0; border-radius:4px; }

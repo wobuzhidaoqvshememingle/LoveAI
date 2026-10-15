@@ -1,0 +1,194 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <title>LoveAI 悬浮球</title>
+    <style>
+        /* 透明背景，无边框 */
+        html, body {
+            margin: 0; padding: 0;
+            background: transparent;
+            overflow: hidden;
+            font-family: "Microsoft YaHei", sans-serif;
+        }
+
+        .float-ball {
+            width: 64px; height: 64px;
+            border-radius: 50%;
+            background: radial-gradient(circle at 30% 30%, #e0c288, #a8854a);
+            display: flex; align-items: center; justify-content: center;
+            font-size: 32px;
+            cursor: pointer;
+            position: relative;
+            box-shadow: 0 4px 16px rgba(201, 163, 106, 0.45);
+            transition: transform 150ms ease;
+        }
+        .float-ball:hover { transform: scale(1.05); }
+
+        /* 红点提醒 */
+        .red-dot {
+            position: absolute;
+            top: 4px; right: 4px;
+            width: 14px; height: 14px;
+            background: #f87171;
+            border-radius: 50%;
+            border: 2px solid #12100e;
+            display: none;
+        }
+        .red-dot.show { display: block; animation: bounce 1s infinite; }
+
+        /* 新消息闪烁 */
+        @keyframes flash {
+            0%, 100% { box-shadow: 0 4px 16px rgba(201, 163, 106, 0.45); }
+            50% { box-shadow: 0 0 24px rgba(248, 113, 113, 0.9); }
+        }
+        .float-ball.flashing { animation: flash 0.6s infinite; }
+
+        @keyframes bounce {
+            0%, 100% { transform: scale(1); }
+            50% { transform: scale(1.15); }
+        }
+
+        /* 弹出菜单 */
+        .popup-menu {
+            position: absolute;
+            bottom: 70px; left: 50%;
+            transform: translateX(-50%);
+            background: #1a1714;
+            border: 1px solid rgba(201, 163, 106, 0.15);
+            border-radius: 6px;
+            padding: 6px 0;
+            min-width: 140px;
+            display: none;
+            box-shadow: 0 4px 20px rgba(0, 0, 0, 0.6);
+        }
+        .popup-menu.show { display: block; }
+        .popup-menu .menu-item {
+            padding: 8px 14px;
+            color: #e8dcc4;
+            font-size: 13px;
+            cursor: pointer;
+            transition: all 150ms ease;
+        }
+        .popup-menu .menu-item:hover {
+            background: rgba(201, 163, 106, 0.15);
+            color: #e0c288;
+        }
+
+        .wrapper {
+            position: relative;
+            width: 64px; height: 64px;
+        }
+    </style>
+</head>
+<body>
+
+<div class="wrapper">
+    <div class="float-ball" id="floatBall" title="LoveAI">
+        💕
+        <div class="red-dot" id="redDot"></div>
+    </div>
+
+    <div class="token-tooltip" id="tokenTip">
+        <div class="tt-tokens" id="ttTokens">今日消耗：—</div>
+        <div class="tt-tier" id="ttTier">当前模型：—</div>
+        <div class="tt-remaining" id="ttRemaining">剩余额度估算：—</div>
+    </div>
+
+    <div class="popup-menu" id="popupMenu">
+        <div class="menu-item" data-action="open-main">打开主窗口</div>
+        <div class="menu-item" data-action="chat-panel">代聊窗口</div>
+        <div class="menu-item" data-action="counsel">咨询小窗</div>
+        <div class="menu-item" data-action="show-tasks">查看任务</div>
+        <div class="menu-item" data-action="settings">设置</div>
+        <div class="menu-item" data-action="quit">退出</div>
+    </div>
+</div>
+
+<script src="qrc:///qtwebchannel/qwebchannel.js"></script>
+<script src="js/bridge.js"></script>
+<script>
+    // 悬浮球交互
+    var ball = document.getElementById('floatBall');
+    var menu = document.getElementById('popupMenu');
+    var dot = document.getElementById('redDot');
+
+    ball.addEventListener('click', function (e) {
+        e.stopPropagation();
+        menu.classList.toggle('show');
+    });
+
+    document.addEventListener('click', function () {
+        menu.classList.remove('show');
+    });
+
+    menu.querySelectorAll('.menu-item').forEach(function (item) {
+        item.addEventListener('click', function () {
+            var action = item.getAttribute('data-action');
+            if (window.call) {
+                call('floatball_action', action).catch(function (e) { console.error(e); });
+            }
+            menu.classList.remove('show');
+        });
+    });
+
+    // 监听新消息：红点 + 闪烁
+    window.addEventListener('bridge:new_message', function () {
+        dot.classList.add('show');
+        ball.classList.add('flashing');
+        setTimeout(function () { ball.classList.remove('flashing'); }, 3000);
+    });
+
+    // 点击红点后消除
+    ball.addEventListener('click', function () {
+        dot.classList.remove('show');
+    });
+
+    // ---- 悬浮球 hover：显示今日 token 用量 tooltip ----
+    var tip = document.getElementById('tokenTip');
+    var tipTokens = document.getElementById('ttTokens');
+    var tipTier = document.getElementById('ttTier');
+    var tipRemaining = document.getElementById('ttRemaining');
+    var tipLoaded = false;
+
+    function fillTip(d) {
+        d = d || {};
+        var tk = (typeof d.today_tokens === 'number') ? d.today_tokens : null;
+        tipTokens.textContent = '今日消耗：' + (tk != null ? tk.toLocaleString() + ' tokens' : '—');
+        tipTier.textContent = '当前模型：' + (d.model_tier || '—');
+        var rem = d.remaining_estimate;
+        tipRemaining.textContent = '剩余额度估算：' +
+            (typeof rem === 'number' ? ('≈' + rem.toLocaleString() + ' tokens') : '—');
+    }
+
+    function showTip() {
+        // popup-menu 打开时不弹 tooltip，避免遮挡
+        if (menu.classList.contains('show')) return;
+        tip.classList.add('show');
+        if (!tipLoaded && window.call) {
+            tipLoaded = true;
+            try {
+                window.call('floatball_token_info').then(function (d) {
+                    fillTip(d);
+                }).catch(function () {
+                    fillTip(null);
+                });
+            } catch (e) {
+                fillTip(null);
+            }
+        }
+    }
+    function hideTip() {
+        tip.classList.remove('show');
+    }
+
+    ball.addEventListener('mouseenter', showTip);
+    ball.addEventListener('mouseleave', hideTip);
+    tip.addEventListener('mouseleave', hideTip);
+    tip.addEventListener('mouseenter', function () {
+        // 鼠标移到 tooltip 上时保持显示，避免闪烁
+    });
+</script>
+
+</body>
+</html>

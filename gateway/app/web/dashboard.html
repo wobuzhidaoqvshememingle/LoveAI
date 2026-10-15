@@ -1,0 +1,431 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>LoveAI Gateway 控制台</title>
+<style>
+  :root {
+    --bg: #0f1115;
+    --bg-2: #161a22;
+    --bg-3: #1e242f;
+    --border: #2a3140;
+    --text: #e6e9ef;
+    --text-dim: #8a93a6;
+    --accent: #4f8cff;
+    --accent-2: #6dd5ff;
+    --ok: #3ecf8e;
+    --warn: #f5a623;
+    --err: #ff5d5d;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: -apple-system, "Segoe UI", "Microsoft YaHei", sans-serif;
+    font-size: 14px;
+    line-height: 1.5;
+    padding: 20px 28px;
+  }
+  /* 顶部 */
+  .header {
+    display: flex; align-items: center; justify-content: space-between;
+    margin-bottom: 20px; flex-wrap: wrap; gap: 12px;
+  }
+  .header h1 { font-size: 20px; font-weight: 600; }
+  .header h1 span { color: var(--accent-2); }
+  .header-right { display: flex; gap: 8px; align-items: center; }
+  .key-input {
+    width: 320px; padding: 8px 12px; background: var(--bg-3);
+    border: 1px solid var(--border); border-radius: 6px;
+    color: var(--text); font-size: 13px; outline: none;
+  }
+  .key-input:focus { border-color: var(--accent); }
+  button {
+    padding: 8px 14px; border: none; border-radius: 6px;
+    background: var(--accent); color: #fff; cursor: pointer;
+    font-size: 13px; transition: opacity .15s;
+  }
+  button:hover { opacity: .85; }
+  button.ghost { background: var(--bg-3); border: 1px solid var(--border); color: var(--text); }
+  button.danger { background: #b34a4a; }
+  button.small { padding: 4px 10px; font-size: 12px; }
+
+  /* 统计卡片 */
+  .stats {
+    display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px;
+    margin-bottom: 20px;
+  }
+  .stat-card {
+    background: var(--bg-2); border: 1px solid var(--border);
+    border-radius: 10px; padding: 16px 18px;
+  }
+  .stat-card .label { color: var(--text-dim); font-size: 12px; margin-bottom: 6px; }
+  .stat-card .value { font-size: 26px; font-weight: 600; }
+  .stat-card .value.ok { color: var(--ok); }
+
+  /* 面板 */
+  .panel {
+    background: var(--bg-2); border: 1px solid var(--border);
+    border-radius: 10px; margin-bottom: 18px; overflow: hidden;
+  }
+  .panel-title {
+    padding: 12px 16px; border-bottom: 1px solid var(--border);
+    font-weight: 600; font-size: 14px; color: var(--text);
+    display: flex; justify-content: space-between; align-items: center;
+  }
+  table { width: 100%; border-collapse: collapse; }
+  th, td { padding: 10px 14px; text-align: left; border-bottom: 1px solid var(--border); }
+  th { color: var(--text-dim); font-weight: 500; font-size: 12px; background: var(--bg-3); }
+  tr:last-child td { border-bottom: none; }
+  tr:hover td { background: rgba(79,140,255,.04); }
+
+  .badge {
+    display: inline-block; padding: 2px 8px; border-radius: 10px;
+    font-size: 11px; font-weight: 500;
+  }
+  .badge.ok { background: rgba(62,207,142,.15); color: var(--ok); }
+  .badge.err { background: rgba(255,93,93,.15); color: var(--err); }
+  .badge.warn { background: rgba(245,166,35,.15); color: var(--warn); }
+  .badge.mute { background: rgba(138,147,166,.15); color: var(--text-dim); }
+  .badge.zero { background: rgba(62,207,142,.18); color: var(--ok); }
+  .badge.key  { background: rgba(245,166,35,.18); color: var(--warn); }
+
+  /* 零配置横幅 */
+  .zero-banner {
+    background: linear-gradient(90deg, rgba(62,207,142,.15), rgba(79,140,255,.1));
+    border: 1px solid rgba(62,207,142,.3);
+    border-radius: 10px; padding: 12px 18px; margin-bottom: 18px;
+    display: flex; align-items: center; gap: 10px;
+  }
+  .zero-banner .dot {
+    width: 8px; height: 8px; border-radius: 50%; background: var(--ok);
+    box-shadow: 0 0 8px var(--ok);
+  }
+  .zero-banner b { color: var(--ok); }
+
+  /* 用量条 */
+  .bar {
+    width: 120px; height: 6px; background: var(--bg-3);
+    border-radius: 3px; overflow: hidden; display: inline-block; vertical-align: middle;
+  }
+  .bar > i { display: block; height: 100%; background: var(--accent); }
+
+  /* 弹窗 */
+  .modal-mask {
+    display: none; position: fixed; inset: 0; background: rgba(0,0,0,.6);
+    z-index: 100; align-items: center; justify-content: center;
+  }
+  .modal-mask.show { display: flex; }
+  .modal {
+    background: var(--bg-2); border: 1px solid var(--border);
+    border-radius: 12px; width: 90vw; max-width: 1100px; height: 85vh;
+    display: flex; flex-direction: column; overflow: hidden;
+  }
+  .modal-head {
+    padding: 14px 20px; border-bottom: 1px solid var(--border);
+    display: flex; justify-content: space-between; align-items: center;
+  }
+  .modal-head h2 { font-size: 16px; }
+  .modal-body {
+    padding: 16px 20px; overflow-y: auto; flex: 1;
+  }
+  .provider-grid {
+    display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+    gap: 10px;
+  }
+  .provider-card {
+    background: var(--bg-3); border: 1px solid var(--border);
+    border-radius: 8px; padding: 12px 14px;
+  }
+  .provider-card .pname { font-weight: 600; margin-bottom: 4px; }
+  .provider-card .pnote { color: var(--text-dim); font-size: 12px; margin-bottom: 10px; }
+  .provider-card a {
+    display: inline-block; padding: 5px 12px; background: var(--accent);
+    color: #fff; text-decoration: none; border-radius: 5px; font-size: 12px;
+  }
+  .tip {
+    background: rgba(79,140,255,.1); border-left: 3px solid var(--accent);
+    padding: 10px 14px; border-radius: 4px; margin-bottom: 14px;
+    color: var(--text-dim); font-size: 13px;
+  }
+  .empty { color: var(--text-dim); text-align: center; padding: 20px; }
+  .toast {
+    position: fixed; top: 20px; right: 20px; padding: 10px 16px;
+    background: var(--bg-3); border: 1px solid var(--border);
+    border-radius: 6px; z-index: 200; display: none;
+  }
+</style>
+</head>
+<body>
+
+<div class="header">
+  <h1>LoveAI <span>Gateway</span> 控制台</h1>
+  <div class="header-right">
+    <button class="ghost" onclick="openCatalog()">获取 API Key</button>
+    <input class="key-input" id="keyInput" placeholder="粘贴从厂商拿到的 API Key, 回车提交">
+    <button onclick="submitKey()">添加 Key</button>
+  </div>
+</div>
+
+<div class="zero-banner">
+  <span class="dot"></span>
+  <span>已内置 <b id="zeroCount">0</b> 个零配置免费模型, <b>无需注册即可使用</b>。
+    其他厂商点右上角「获取 API Key」跳转注册。</span>
+</div>
+
+<div class="stats">
+  <div class="stat-card">
+    <div class="label">今日请求数</div>
+    <div class="value" id="statReqs">—</div>
+  </div>
+  <div class="stat-card">
+    <div class="label">今日 Token</div>
+    <div class="value" id="statToks">—</div>
+  </div>
+  <div class="stat-card">
+    <div class="label">成功率</div>
+    <div class="value ok" id="statOk">—</div>
+  </div>
+</div>
+
+<div class="panel">
+  <div class="panel-title">
+    <span>Provider 健康状态</span>
+    <span style="font-size:12px;color:var(--text-dim)" id="provCount"></span>
+  </div>
+  <table>
+    <thead>
+      <tr>
+        <th>名称</th><th>状态</th><th>成功率</th><th>平均延迟</th>
+        <th>RPM / TPM 用量</th><th>操作</th>
+      </tr>
+    </thead>
+    <tbody id="provBody">
+      <tr><td colspan="6" class="empty">加载中...</td></tr>
+    </tbody>
+  </table>
+</div>
+
+<div class="panel">
+  <div class="panel-title"><span>最近请求日志</span></div>
+  <table>
+    <thead>
+      <tr>
+        <th>时间</th><th>Provider</th><th>模型</th>
+        <th>Prompt Tok</th><th>Comp Tok</th><th>延迟</th><th>状态</th>
+      </tr>
+    </thead>
+    <tbody id="logBody">
+      <tr><td colspan="7" class="empty">加载中...</td></tr>
+    </tbody>
+  </table>
+</div>
+
+<!-- 获取 Key 弹窗 -->
+<div class="modal-mask" id="catalogModal">
+  <div class="modal">
+    <div class="modal-head">
+      <h2>获取免费 API Key</h2>
+      <button class="ghost small" onclick="closeCatalog()">关闭</button>
+    </div>
+    <div class="modal-body">
+      <div class="tip">
+        网关本身不发放 Key。请点击下方厂商跳转注册, 拿到 Key 后粘贴到右上角输入框提交,
+        网关会自动识别厂商并加密保存。Ollama 为本地部署, 无需 Key。
+      </div>
+      <div class="provider-grid" id="providerGrid">
+        <div class="empty">加载中...</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+// ---------- 工具 ----------
+function fmtNum(n) {
+  if (n == null) return "—";
+  n = Number(n);
+  if (n >= 1e6) return (n/1e6).toFixed(2) + "M";
+  if (n >= 1e3) return (n/1e3).toFixed(1) + "K";
+  return String(n);
+}
+function fmtTime(ts) {
+  if (!ts) return "—";
+  const d = new Date(ts * 1000);
+  return d.toLocaleString("zh-CN", {hour12:false});
+}
+function toast(msg) {
+  const t = document.getElementById("toast");
+  t.textContent = msg; t.style.display = "block";
+  setTimeout(() => t.style.display = "none", 2500);
+}
+
+// ---------- 统计 ----------
+async function loadStats() {
+  try {
+    const r = await fetch("/admin/stats/summary");
+    const d = await r.json();
+    document.getElementById("statReqs").textContent = d.total_requests ?? "—";
+    document.getElementById("statToks").textContent = fmtNum(d.total_tokens);
+    document.getElementById("statOk").textContent =
+      d.total_requests ? (d.success_rate * 100).toFixed(1) + "%" : "—";
+  } catch (e) {}
+}
+
+// ---------- Provider 表 ----------
+async function loadProviders() {
+  try {
+    const r = await fetch("/admin/providers");
+    const list = await r.json();
+    const body = document.getElementById("provBody");
+    document.getElementById("provCount").textContent = `共 ${list.length} 个`;
+    if (!list.length) {
+      body.innerHTML = '<tr><td colspan="6" class="empty">暂无 provider, 请先在 config.yaml 配置或右上角添加 Key</td></tr>';
+      return;
+    }
+    body.innerHTML = list.map(p => {
+      const ok = p.ok !== false;
+      const sr = p.success_rate != null ? (p.success_rate*100).toFixed(0)+"%" : "—";
+      const lat = p.avg_latency_ms ? p.avg_latency_ms.toFixed(0)+"ms" : "—";
+      const rpm = p.rpm ?? 0, tpm = p.tpm ?? 0;
+      const enabled = p.enabled !== false;
+      const zeroBadge = p.is_zero_config
+        ? '<span class="badge zero">开箱即用</span>'
+        : '<span class="badge key">需 Key</span>';
+      return `<tr>
+        <td><b>${p.provider || p.name}</b> ${zeroBadge}</td>
+        <td><span class="badge ${ok?'ok':'err'}">${ok?'健康':'异常'}</span>
+            ${enabled?'':'<span class="badge mute">已禁用</span>'}</td>
+        <td>${sr}</td>
+        <td>${lat}</td>
+        <td>
+          <div class="bar"><i style="width:${Math.min(100, rpm)}%"></i></div>
+          <span style="font-size:11px;color:var(--text-dim)"> rpm ${rpm} / tpm ${fmtNum(tpm)}</span>
+        </td>
+        <td>
+          ${enabled
+            ? `<button class="ghost small" onclick="toggleProv('${p.provider||p.name}', false)">禁用</button>`
+            : `<button class="small" onclick="toggleProv('${p.provider||p.name}', true)">启用</button>`}
+        </td>
+      </tr>`;
+    }).join("");
+  } catch (e) {
+    document.getElementById("provBody").innerHTML =
+      '<tr><td colspan="6" class="empty">加载失败</td></tr>';
+  }
+}
+
+async function toggleProv(name, enable) {
+  const action = enable ? "enable" : "disable";
+  await fetch(`/admin/providers/${encodeURIComponent(name)}/${action}`, {method:"POST"});
+  loadProviders();
+}
+
+// ---------- 日志 ----------
+async function loadLogs() {
+  try {
+    const r = await fetch("/admin/usage");
+    const d = await r.json();
+    const logs = d.recent_logs || [];
+    const body = document.getElementById("logBody");
+    if (!logs.length) {
+      body.innerHTML = '<tr><td colspan="7" class="empty">暂无请求日志</td></tr>';
+      return;
+    }
+    body.innerHTML = logs.map(l => `<tr>
+      <td style="color:var(--text-dim)">${fmtTime(l.ts)}</td>
+      <td>${l.provider}</td>
+      <td>${l.model}</td>
+      <td>${l.prompt_tokens}</td>
+      <td>${l.completion_tokens}</td>
+      <td>${l.latency_ms}ms</td>
+      <td><span class="badge ${l.status==='success'?'ok':'err'}">${l.status}</span></td>
+    </tr>`).join("");
+  } catch (e) {}
+}
+
+// ---------- 添加 Key ----------
+async function submitKey() {
+  const inp = document.getElementById("keyInput");
+  const key = inp.value.trim();
+  if (!key) { toast("请先粘贴 Key"); return; }
+  try {
+    const r = await fetch("/admin/keys", {
+      method: "POST",
+      headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({api_key: key}),
+    });
+    const d = await r.json();
+    if (d.ok) {
+      inp.value = "";
+      toast(`识别为: ${d.detected.provider_name} (${d.detected.matched_by})`);
+    } else {
+      toast("提交失败: " + (d.detail || "unknown"));
+    }
+  } catch (e) {
+    toast("网络错误");
+  }
+}
+document.getElementById("keyInput").addEventListener("keydown", e => {
+  if (e.key === "Enter") submitKey();
+});
+
+// ---------- 厂商目录弹窗 ----------
+async function openCatalog() {
+  document.getElementById("catalogModal").classList.add("show");
+  const grid = document.getElementById("providerGrid");
+  grid.innerHTML = '<div class="empty">加载中...</div>';
+  try {
+    const r = await fetch("/admin/catalog");
+    const d = await r.json();
+    const list = d.free_providers || [];
+    const zeroList = list.filter(p => p.is_zero_config);
+    document.getElementById("zeroCount").textContent = zeroList.length;
+    grid.innerHTML = list.map(p => {
+      const badge = p.is_zero_config
+        ? '<span class="badge zero">开箱即用</span>'
+        : '<span class="badge key">需 Key</span>';
+      const action = p.is_zero_config
+        ? `<a href="${p.signup_url}" target="_blank" rel="noopener">查看文档 →</a>`
+        : `<a href="${p.signup_url}" target="_blank" rel="noopener">去注册 →</a>`;
+      return `
+      <div class="provider-card">
+        <div class="pname">${p.name} ${badge}</div>
+        <div class="pnote">${p.free_tier_note}</div>
+        ${action}
+      </div>`;
+    }).join("");
+  } catch (e) {
+    grid.innerHTML = '<div class="empty">加载失败</div>';
+  }
+}
+function closeCatalog() {
+  document.getElementById("catalogModal").classList.remove("show");
+}
+document.getElementById("catalogModal").addEventListener("click", e => {
+  if (e.target.id === "catalogModal") closeCatalog();
+});
+
+// ---------- 自动刷新 ----------
+async function loadZeroCount() {
+  try {
+    const r = await fetch("/admin/catalog");
+    const d = await r.json();
+    const list = d.free_providers || [];
+    document.getElementById("zeroCount").textContent =
+      list.filter(p => p.is_zero_config).length;
+  } catch (e) {}
+}
+function refreshAll() {
+  loadStats();
+  loadProviders();
+  loadLogs();
+}
+loadZeroCount();
+refreshAll();
+setInterval(refreshAll, 3000);
+</script>
+</body>
+</html>

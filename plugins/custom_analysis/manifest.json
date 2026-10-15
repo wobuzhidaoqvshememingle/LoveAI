@@ -1,0 +1,1 @@
+{"name": "custom_analysis", "version": "1.0.0", "author": "LoveAI", "description": "添加自定义分析维度（幽默感/真诚度）", "entry": "plugin.py"}

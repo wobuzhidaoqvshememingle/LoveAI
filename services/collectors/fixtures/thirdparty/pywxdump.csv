@@ -1,0 +1,6 @@
+msg_id,is_sender,talker,nickname,content,create_time
+1001,1,wxid_target,小美,在吗,2026-01-01 12:00:00
+1002,0,wxid_target,小美,在的怎么了,2026-01-01 12:01:00
+1003,1,wxid_target,小美,晚上一起吃饭吗,2026-01-01 12:02:00
+1004,0,wxid_target,小美,好呀几点,2026-01-01 12:03:00
+1005,1,wxid_target,小美,七点老地方,2026-01-01 12:04:00

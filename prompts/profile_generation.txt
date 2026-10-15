@@ -1,0 +1,52 @@
+你是心理学侧写专家。根据以下信息，为对方生成完整的人格档案。这是「地球online恋爱小游戏」的人物档案，输出要像游戏NPC图鉴，具体、可落地、有行为预测，不要空泛套话。
+
+【基本信息】
+{{basic_info}}
+
+【聊天记录样本】
+{{chat_samples}}
+
+【用户补充】
+{{user_notes}}
+
+请输出两部分：
+
+## SOUL.md（人格描述文本）
+# 她是谁
+- 核心特质：5-8个双字词（如：敏感、独立、嘴硬、缺安全感）
+- 依恋类型：安全/焦虑/回避/恐惧（附判断依据，要挂具体聊天证据）
+- 沟通风格：直接/委婉/被动攻击/冷暴力倾向
+- 核心情感需求：她最需要什么（不是"被爱"这种废话，要具体到"被优先选择"还是"被允许独处"）
+- 行为模式：生气时/开心时/压力下分别会怎样
+- 说话方式：用词习惯/语气/常用表情/口头禅
+- 价值观与底线：什么事能忍、什么事绝对碰不得
+- 预测：在X情境下大概率会怎样（至少给3个具体场景预测）
+
+## relationship_diagnosis.json（关系诊断六维）
+必须给出以下6个维度，每个维度给 0-100 分 + 一句话判断依据（挂聊天证据）：
+{
+  "emotional_value": {"score": 0-100, "comment": "她给你的情绪价值如何？是能接住你的情绪还是经常让你内耗？"},
+  "communication_quality": {"score": 0-100, "comment": "沟通质量：是双向奔赴还是你在单向输出？回复速度/字数/追问意愿如何？"},
+  "topic_depth": {"score": 0-100, "comment": "话题深度：是停留在早安晚安，还是能聊到童年/价值观/未来？"},
+  "conflict_handling": {"score": 0-100, "comment": "冲突处理：吵架后是冷战/翻旧账/就事论事/主动修复？"},
+  "future_expectation": {"score": 0-100, "comment": "未来预期：她有没有把你放进她的未来？提到过共同计划/见朋友/见家人吗？"},
+  "attraction_balance": {"score": 0-100, "comment": "吸引力平衡：谁更被谁吸引？投入比大概是多少（对方投入/我方投入，0.7-1.3为健康）"}
+}
+
+## personality.json（数值属性）
+{
+  "openness": 0-100,
+  "conscientiousness": 0-100,
+  "extraversion": 0-100,
+  "agreeableness": 0-100,
+  "neuroticism": 0-100,
+  "attachment_style": "secure/anxious/avoidant/fearful",
+  "love_language": ["acts_of_service", "words_of_affirmation", "gifts", "quality_time", "physical_touch"],
+  "conflict_style": "avoidance/confrontation/compromise/passive_aggressive",
+  "decision_style": "emotion_first/reason_first/impulsive/cautious"
+}
+
+【输出要求】
+- 所有 score 必须有聊天证据支撑，不要凭直觉打分。
+- comment 要具体到"她上次因为XX事冷战了3天"这种粒度，不要"沟通一般"这种废话。
+- 如果聊天样本太少，score 可以打 50（中性）并在 comment 里写"证据不足，待观察"。

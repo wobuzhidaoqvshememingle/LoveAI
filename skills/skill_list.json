@@ -1,0 +1,44 @@
+{
+  "skills": [
+    {
+      "id": "invitation",
+      "name": "邀约话术生成器",
+      "description": "生成自然不尴尬的邀约话术，支持直球/铺垫/温水三种风格",
+      "file": "invitation.md",
+      "category": "communication",
+      "version": "1.0"
+    },
+    {
+      "id": "conflict_repair",
+      "name": "吵架修复指南",
+      "description": "冷战/吵架后的破冰话术和修复步骤",
+      "file": "conflict_repair.md",
+      "category": "conflict",
+      "version": "1.0"
+    },
+    {
+      "id": "cold_reading",
+      "name": "冷读与话题延展",
+      "description": "通过冷读快速建立共鸣，延展话题避免冷场",
+      "file": "cold_reading.md",
+      "category": "communication",
+      "version": "1.0"
+    },
+    {
+      "id": "breakup_decision",
+      "name": "分手/复合决策辅助",
+      "description": "理性分析关系是否该继续，辅助分手或复合决策",
+      "file": "breakup_decision.md",
+      "category": "decision",
+      "version": "1.0"
+    },
+    {
+      "id": "date_planning",
+      "name": "约会策划助手",
+      "description": "根据对方喜好和预算，生成完整约会方案",
+      "file": "date_planning.md",
+      "category": "dating",
+      "version": "1.0"
+    }
+  ]
+}

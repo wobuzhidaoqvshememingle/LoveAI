@@ -1,0 +1,89 @@
+/* ============================================================
+ * LoveAI-v2 控件专用样式表
+ * 配合 main.qss 使用，覆盖特定 objectName 的控件样式
+ * ============================================================ */
+
+/* ---------- 左侧导航按钮 ---------- */
+/* 使用方式: button.setObjectName("navButton") */
+QPushButton#navButton {
+    text-align: left;
+    padding: 10px 16px;
+    border: none;
+    border-left: 3px solid transparent;
+    background-color: transparent;
+    color: #b0b0c0;
+    font-size: 10pt;
+}
+
+QPushButton#navButton:hover {
+    background-color: #0f3460;
+    color: #f4d03f;
+    border-left: 3px solid #d4af37;
+}
+
+QPushButton#navButton:checked,
+QPushButton#navButton[selected="true"] {
+    background-color: #0f3460;
+    color: #f4d03f;
+    border-left: 3px solid #f4d03f;
+}
+
+/* ---------- 卡片容器 ---------- */
+/* 使用方式: widget.setObjectName("card") */
+QWidget#card {
+    background-color: #0f3460;
+    border: 1px solid #d4af37;
+    border-radius: 8px;
+}
+
+/* ---------- 顶部栏 ---------- */
+/* 使用方式: widget.setObjectName("topBar") */
+QWidget#topBar {
+    background-color: #16213e;
+    border-bottom: 1px solid #d4af37;
+}
+
+/* ---------- 徽章标签 ---------- */
+/* 使用方式: label.setObjectName("badge") */
+QLabel#badge {
+    background-color: #d4af37;
+    color: #1a1a2e;
+    border-radius: 10px;
+    padding: 2px 8px;
+    font-weight: bold;
+    font-size: 9pt;
+}
+
+/* ---------- 代聊窗弹幕区 ---------- */
+/* 使用方式: widget.setObjectName("danmakuArea") */
+QWidget#danmakuArea {
+    background-color: transparent;
+    border: none;
+}
+
+/* ---------- 任务卡片内按钮 ---------- */
+QPushButton#btnComplete {
+    background-color: #2e7d32;
+    border: 1px solid #4caf50;
+    color: #ffffff;
+    border-radius: 4px;
+    padding: 4px 12px;
+}
+
+QPushButton#btnComplete:hover {
+    background-color: #388e3c;
+    border: 1px solid #66bb6a;
+}
+
+QPushButton#btnAbandon {
+    background-color: #b71c1c;
+    border: 1px solid #f44336;
+    color: #ffffff;
+    border-radius: 4px;
+    padding: 4px 12px;
+}
+
+QPushButton#btnAbandon:hover {
+    background-color: #c62828;
+    border: 1px solid #ef5350;
+}

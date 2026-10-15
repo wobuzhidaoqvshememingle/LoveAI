@@ -1,0 +1,1446 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>LoveAI - 恋爱助手</title>
+    <link rel="stylesheet" href="css/main.css">
+    <script src="qrc:///qtwebchannel/qwebchannel.js"></script>
+</head>
+<body>
+
+<div class="app-shell">
+
+    <!-- ============ 顶部栏 ============ -->
+    <header class="top-bar">
+        <div class="person-avatar" id="topAvatar">👤</div>
+        <div class="person-name" id="topPersonName">未选择对象</div>
+        <span class="badge relationship-badge" id="topStageBadge">初识</span>
+        <div class="affection-ring-wrap">
+            <canvas id="topAffectionRing" width="44" height="44"></canvas>
+        </div>
+        <div class="search-box">
+            <input type="text" id="globalSearch" placeholder="搜索对话 / 人物 / 任务...">
+        </div>
+        <button class="icon-btn" id="openSettingsBtn" title="设置">⚙</button>
+    </header>
+
+    <!-- ============ 左侧导航 ============ -->
+    <nav class="sidebar">
+        <div class="nav-item active" data-tab="chat-analysis">
+            <span class="nav-icon">💬</span><span>聊天分析</span>
+        </div>
+        <div class="nav-item" data-tab="counseling">
+            <span class="nav-icon">💡</span><span>情感咨询</span>
+        </div>
+        <div class="nav-item" data-tab="profile">
+            <span class="nav-icon">📁</span><span>人物档案</span>
+        </div>
+        <div class="nav-item" data-tab="hero-wall">
+            <span class="nav-icon">🏆</span><span>英雄墙</span>
+        </div>
+        <div class="nav-item" data-tab="medal-wall">
+            <span class="nav-icon">🎖</span><span>勋章墙</span>
+        </div>
+        <div class="sidebar-footer">
+            <div class="nav-item" id="sidebarSettingsBtn">
+                <span class="nav-icon">⚙</span><span>设置</span>
+            </div>
+        </div>
+    </nav>
+
+    <!-- ============ 主内容区 ============ -->
+    <main class="main-content">
+
+        <!-- Tab: 概览 Dashboard -->
+        <section class="tab-pane" id="tab-dashboard">
+            <div class="card">
+                <div class="card-title">今日概览</div>
+                <p class="placeholder-text">欢迎使用 LoveAI，在左侧选择功能开始吧。</p>
+            </div>
+            <div class="card">
+                <div class="card-title">最近任务</div>
+                <div id="dashboardTaskList"><p class="placeholder-text">暂无任务</p></div>
+            </div>
+        </section>
+
+        <!-- Tab: 聊天分析 -->
+        <section class="tab-pane active" id="tab-chat-analysis">
+
+            <!-- 顶部输入区 + 微信状态 -->
+            <div class="card">
+                <div class="card-title">
+                    聊天记录分析
+                    <span class="wechat-status-indicator" id="wechatStatusIndicator">
+                        <span class="wechat-dot" id="wechatDot"></span>
+                        <span id="wechatStatusText">未连接</span>
+                    </span>
+                </div>
+                <!-- 人物选择 + 加载聊天记录 -->
+                <div class="chat-person-selector">
+                    <select id="chatPersonSelect" class="chat-person-select">
+                        <option value="">选择聊天对象...</option>
+                    </select>
+                    <button class="btn-ghost btn-sm" id="loadChatBtn">加载最近50条</button>
+                    <span class="chat-record-count" id="chatRecordCount"></span>
+                </div>
+                <textarea class="chat-input-area" id="chatInput" placeholder="选择聊天对象后自动加载记录，也可手动粘贴..."></textarea>
+                <div class="chat-input-actions">
+                    <button class="btn-primary" id="analyzeBtn">开始分析</button>
+                    <button class="btn-ghost" id="captureAnalyzeBtn" title="截屏识别并填入输入框">📷 截图分析</button>
+                    <label class="auto-analysis-toggle">
+                        <input type="checkbox" id="autoAnalysisToggle"> 自动分析新消息
+                    </label>
+                </div>
+            </div>
+
+            <!-- 8 模块进度条 -->
+            <div class="card analysis-progress-card" id="analysisProgressCard" style="display:none;">
+                <div class="card-title">分析进度</div>
+                <div class="module-progress-bar" id="moduleProgressBar">
+                    <div class="progress-module" data-idx="0"><span class="pm-icon">①</span><span class="pm-name">情感分析</span></div>
+                    <div class="progress-module" data-idx="1"><span class="pm-icon">②</span><span class="pm-name">关键词</span></div>
+                    <div class="progress-module" data-idx="2"><span class="pm-icon">③</span><span class="pm-name">RAG检索</span></div>
+                    <div class="progress-module" data-idx="3"><span class="pm-icon">④</span><span class="pm-name">意图识别</span></div>
+                    <div class="progress-module" data-idx="4"><span class="pm-icon">⑤</span><span class="pm-name">关系评估</span></div>
+                    <div class="progress-module" data-idx="5"><span class="pm-icon">⑥</span><span class="pm-name">回复生成</span></div>
+                    <div class="progress-module" data-idx="6"><span class="pm-icon">⑦</span><span class="pm-name">安全检测</span></div>
+                    <div class="progress-module" data-idx="7"><span class="pm-icon">⑧</span><span class="pm-name">好感度</span></div>
+                </div>
+            </div>
+
+            <!-- 弹幕式分析流 -->
+            <div class="card danmaku-stream-card">
+                <div class="card-title">分析过程 <span class="danmaku-clear-btn" id="clearDanmakuBtn">清空</span></div>
+                <div class="danmaku-stream" id="danmakuStream">
+                    <p class="placeholder-text">等待分析...</p>
+                </div>
+            </div>
+
+            <!-- 8 模块结果卡片网格 -->
+            <div class="analysis-grid" id="analysisGrid">
+
+                <!-- 1. 情感分析 -->
+                <div class="card analysis-card" id="cardEmotion">
+                    <div class="card-title">① 情感分析</div>
+                    <div class="emotion-tag-row">
+                        <span class="emotion-tag" id="emotionTag">--</span>
+                        <div class="emotion-intensity">
+                            <div class="emotion-intensity-fill" id="emotionIntensityFill" style="width:0%"></div>
+                        </div>
+                        <span class="emotion-intensity-text" id="emotionIntensityText">0%</span>
+                    </div>
+                    <div class="keyword-tag-row" id="emotionKeywords"></div>
+                    <div class="emotion-is-question" id="emotionIsQuestion"></div>
+                </div>
+
+                <!-- 2. 关键词提取 -->
+                <div class="card analysis-card" id="cardKeywords">
+                    <div class="card-title">② 关键词提取</div>
+                    <div class="word-cloud" id="wordCloud"><p class="placeholder-text">--</p></div>
+                </div>
+
+                <!-- 3. RAG 知识库 -->
+                <div class="card analysis-card" id="cardRAG">
+                    <div class="card-title">③ RAG 知识库</div>
+                    <div class="rag-result-list" id="ragResultList"><p class="placeholder-text">--</p></div>
+                </div>
+
+                <!-- 4. 意图识别 -->
+                <div class="card analysis-card" id="cardIntent">
+                    <div class="card-title">④ 意图识别</div>
+                    <div class="intent-category" id="intentCategory">--</div>
+                    <div class="intent-confidence" id="intentConfidence"></div>
+                    <div class="intent-implied" id="intentImplied" style="margin-top:8px; font-size:13px; color:#c9a96e; display:none;">
+                        <div style="font-weight:bold; margin-bottom:4px;">💭 言外之意</div>
+                        <div id="intentImpliedText" style="line-height:1.5;"></div>
+                    </div>
+                    <div class="intent-true" id="intentTrue" style="margin-top:8px; font-size:13px; color:#a78bfa; display:none;">
+                        <div style="font-weight:bold; margin-bottom:4px;">🎯 真实意图</div>
+                        <div id="intentTrueText" style="line-height:1.5;"></div>
+                    </div>
+                </div>
+
+                <!-- 5. 关系评估 -->
+                <div class="card analysis-card" id="cardRelation">
+                    <div class="card-title">⑤ 关系评估</div>
+                    <div class="relation-stage" id="relationStage">--</div>
+                    <div class="radar-chart radar-sm"><canvas id="miniRadarCanvas"></canvas></div>
+                </div>
+
+                <!-- 6. 回复建议 -->
+                <div class="card analysis-card reply-card-highlight" id="cardReply">
+                    <div class="card-title">⑥ 回复建议</div>
+                    <div class="suggested-reply" id="suggestedReply">--</div>
+                    <div class="reply-action-row">
+                        <button class="btn-primary btn-fill-wechat" id="fillWechatBtn">📱 填入微信</button>
+                        <button class="btn-secondary" id="copyReplyBtn">📋 复制</button>
+                    </div>
+                </div>
+
+                <!-- 7. 安全检测 -->
+                <div class="card analysis-card" id="cardSafety">
+                    <div class="card-title">⑦ 安全检测</div>
+                    <div class="safety-status" id="safetyStatus">--</div>
+                    <div class="safety-stats" id="safetyStats"></div>
+                </div>
+
+                <!-- 8. 好感度变化 -->
+                <div class="card analysis-card" id="cardAffection">
+                    <div class="card-title">⑧ 好感度变化</div>
+                    <div class="affection-compare">
+                        <div class="affection-side">
+                            <div class="affection-label">分析前</div>
+                            <div class="affection-num" id="affectionBefore">--</div>
+                        </div>
+                        <div class="affection-arrow">→</div>
+                        <div class="affection-side">
+                            <div class="affection-label">分析后</div>
+                            <div class="affection-num" id="affectionAfter">--</div>
+                        </div>
+                        <div class="affection-delta" id="affectionDelta">±0</div>
+                    </div>
+                </div>
+
+            </div>
+        </section>
+
+        <!-- Tab: 情感咨询 -->
+        <section class="tab-pane" id="tab-counseling">
+            <!-- 安全提示横幅 -->
+            <div class="safety-banner" id="consultSafetyBanner" style="display:none;">
+                ⚠️ 如果你正在经历严重的情绪困扰或有伤害自己的想法，请立即拨打心理援助热线 400-161-9995，或联系身边信任的人寻求帮助。
+            </div>
+            <div class="card">
+                <div class="card-title">
+                    咨询模式
+                    <div>
+                        <button class="btn-secondary counseling-mode active" data-mode="self">自我成长</button>
+                        <button class="btn-secondary counseling-mode" data-mode="partner">对象视角</button>
+                        <button class="btn-secondary btn-sm" id="clearConsultHistoryBtn">🗑 清空历史</button>
+                    </div>
+                </div>
+                <div id="counselingDialog" style="max-height:400px;overflow-y:auto;margin-bottom:12px;">
+                    <p class="placeholder-text">输入你的情感问题，AI 为你分析。</p>
+                </div>
+                <textarea id="counselingInput" placeholder="说说你的困惑..."></textarea>
+                <button class="btn-primary" id="counselingSendBtn" style="margin-top:8px;">发送咨询</button>
+            </div>
+        </section>
+
+        <!-- Tab: 人物档案 -->
+        <section class="tab-pane" id="tab-profile">
+            <div class="card">
+                <div class="card-title">基本信息
+                    <button class="btn-primary btn-sm" id="saveProfileBtn">💾 保存</button>
+                    <button class="btn-secondary btn-sm" id="importWechatBtn" style="margin-left:8px;">📥 实时拉取</button>
+                    <button class="btn-warning btn-sm" id="importFileBtn" style="margin-left:4px;">📥 一键导入</button>
+                    <button class="btn-success btn-sm" id="genProfileBtn" style="margin-left:4px;">🧠 生成档案</button>
+                </div>
+                <div class="setting-row">
+                    <span class="setting-label">昵称</span>
+                    <input type="text" id="profileName" placeholder="对方昵称">
+                </div>
+                <div class="setting-row">
+                    <span class="setting-label">性别</span>
+                    <select id="profileGender">
+                        <option value="female">女</option>
+                        <option value="male">男</option>
+                    </select>
+                </div>
+                <div class="setting-row">
+                    <span class="setting-label">年龄</span>
+                    <input type="number" id="profileAge" placeholder="年龄" min="16" max="99">
+                </div>
+                <div class="setting-row">
+                    <span class="setting-label">职业</span>
+                    <input type="text" id="profileOccupation" placeholder="职业">
+                </div>
+                <div class="setting-row">
+                    <span class="setting-label">备注</span>
+                    <input type="text" id="profileNote" placeholder="关系备注">
+                </div>
+            </div>
+
+            <div class="card">
+                <div class="card-title">🔬 完整诊断报告（18 部分）
+                    <button class="btn-primary btn-sm" id="viewDiagReportBtn" style="margin-left:8px;">📄 查看完整诊断报告</button>
+                </div>
+                <div id="diagReportWrap" style="display:none;">
+                    <div id="diagSummary" style="margin-bottom:12px;"></div>
+                    <div id="diagNav" style="display:flex;flex-wrap:wrap;gap:6px;margin:10px 0;"></div>
+                    <div id="diagSections"></div>
+                </div>
+                <p class="placeholder-text" id="diagPlaceholder">尚未生成。选择对象后点击上方按钮，系统会基于聊天记录与侧写现场生成。</p>
+            </div>
+
+            <div class="card">
+                <div class="card-title">18 维好感度雷达图</div>
+                <div class="radar-chart"><canvas id="radarChartCanvas"></canvas></div>
+            </div>
+
+            <!-- 心情状态 -->
+            <div class="card" id="moodCard">
+                <div class="card-title">
+                    💭 实时心情状态
+                    <button class="btn-secondary btn-sm" id="changeMoodBtn" style="margin-left:8px;">✏️ 设置心情</button>
+                </div>
+                <div id="currentMoodDisplay" style="margin-bottom:16px;">
+                    <p class="placeholder-text">暂无心情状态，聊天时会自动检测</p>
+                </div>
+                <div id="moodSelector" style="display:none; margin-bottom:16px; padding:12px; background:rgba(255,255,255,0.03); border-radius:8px;">
+                    <div style="margin-bottom:8px; font-size:13px; color:#999;">选择心情状态：</div>
+                    <div id="moodTagList" style="display:flex; flex-wrap:wrap; gap:8px;"></div>
+                </div>
+                <div id="moodPatterns" style="margin-top:12px;">
+                    <div style="font-weight:bold; margin-bottom:8px;">🔮 惯例情绪模式</div>
+                    <div id="moodPatternList"><p class="placeholder-text">暂无记录，聊多了会自动识别</p></div>
+                </div>
+                <div id="moodHistory" style="margin-top:12px;">
+                    <div style="font-weight:bold; margin-bottom:8px;">📊 最近心情</div>
+                    <div id="moodHistoryList"><p class="placeholder-text">暂无记录</p></div>
+                </div>
+            </div>
+
+            <!-- 生理周期 -->
+            <div class="card" id="cycleCard">
+                <div class="card-title">
+                    🌸 生理周期
+                    <button class="btn-primary btn-sm" id="addCycleBtn" style="margin-left:8px;">➕ 记录姨妈期</button>
+                </div>
+                <div id="cycleCurrentPhase" style="margin-bottom:16px;">
+                    <p class="placeholder-text">暂无周期记录，点击上方按钮添加</p>
+                </div>
+                <div id="cycleAddForm" style="display:none; margin-bottom:16px; padding:12px; background:rgba(255,255,255,0.03); border-radius:8px;">
+                    <div class="setting-row">
+                        <span class="setting-label">开始日期</span>
+                        <input type="date" id="cycleStartDate">
+                    </div>
+                    <div class="setting-row">
+                        <span class="setting-label">周期天数</span>
+                        <input type="number" id="cycleLength" value="28" min="21" max="35">
+                    </div>
+                    <div class="setting-row">
+                        <span class="setting-label">经期天数</span>
+                        <input type="number" id="periodLength" value="5" min="3" max="10">
+                    </div>
+                    <div class="setting-row">
+                        <span class="setting-label">症状备注</span>
+                        <input type="text" id="cycleSymptoms" placeholder="例如：痛经、情绪低落">
+                    </div>
+                    <button class="btn-primary" id="saveCycleBtn" style="margin-top:8px;">保存记录</button>
+                    <button class="btn-secondary" id="cancelCycleBtn" style="margin-top:8px; margin-left:8px;">取消</button>
+                </div>
+                <div id="cycleHistory" style="margin-top:12px;">
+                    <div style="font-weight:bold; margin-bottom:8px;">📅 历史记录与预测</div>
+                    <div id="cycleHistoryList"><p class="placeholder-text">暂无记录</p></div>
+                </div>
+                <div id="cycleAdvice" style="margin-top:16px; padding:12px; background:rgba(168,85,247,0.1); border-radius:8px; display:none;">
+                    <div style="font-weight:bold; color:#a855f7; margin-bottom:8px;">💡 当前阶段攻略</div>
+                    <div id="cycleAdviceContent" style="line-height:1.6; font-size:13px;"></div>
+                </div>
+            </div>
+
+            <div class="card">
+                <div class="card-title">心理学侧写 (SOUL.md)</div>
+                <div class="psych-tags-row" style="margin-bottom:12px;">
+                    <div class="setting-row">
+                        <span class="setting-label">MBTI</span>
+                        <input type="text" id="psychMbti" placeholder="例如：INFP">
+                    </div>
+                    <div class="setting-row">
+                        <span class="setting-label">大五人格</span>
+                        <input type="text" id="psychBigFive" placeholder="例如：开放性高/尽责性中...">
+                    </div>
+                    <div class="setting-row">
+                        <span class="setting-label">依恋类型</span>
+                        <select id="psychAttachment">
+                            <option value="">请选择</option>
+                            <option value="secure">安全型</option>
+                            <option value="anxious">焦虑型</option>
+                            <option value="avoidant">回避型</option>
+                            <option value="fearful">恐惧型</option>
+                        </select>
+                    </div>
+                    <div class="setting-row">
+                        <span class="setting-label">沟通风格</span>
+                        <input type="text" id="psychCommStyle" placeholder="例如：直接型/委婉型...">
+                    </div>
+                </div>
+                <textarea id="soulEditor" style="width:100%;min-height:200px;" placeholder="心理学侧写详细描述..."></textarea>
+            </div>
+
+            <!-- 照片管理 -->
+            <div class="card">
+                <div class="card-title">
+                    📸 照片管理
+                    <button class="btn-secondary btn-sm" id="uploadPhotoBtn">上传照片</button>
+                </div>
+                <div class="photo-grid" id="photoGrid">
+                    <p class="placeholder-text">暂无照片</p>
+                </div>
+            </div>
+
+            <!-- 立绘匹配 -->
+            <div class="card">
+                <div class="card-title">🎨 立绘匹配</div>
+                <div class="setting-row">
+                    <span class="setting-label">情绪状态</span>
+                    <select id="portraitEmotionSelect">
+                        <option value="happy">开心</option>
+                        <option value="neutral">平静</option>
+                        <option value="sad">难过</option>
+                        <option value="angry">生气</option>
+                        <option value="shy">害羞</option>
+                        <option value="love">喜欢</option>
+                    </select>
+                </div>
+                <div class="action-row">
+                    <button class="btn-primary" id="matchPortraitBtn">🎭 匹配立绘</button>
+                </div>
+                <div id="portraitPreview" style="margin-top:12px; text-align:center;">
+                    <p class="placeholder-text">选择情绪后点击匹配</p>
+                </div>
+            </div>
+
+            <!-- 备忘录 / 喜恶清单 -->
+            <div class="card">
+                <div class="card-title">
+                    📝 喜恶清单
+                    <button class="btn-secondary btn-sm" id="addPreferenceBtn">+ 手动添加</button>
+                </div>
+                <div id="preferenceList"><p class="placeholder-text">暂无记录</p></div>
+            </div>
+        </section>
+
+        <!-- Tab: 英雄墙 -->
+        <section class="tab-pane" id="tab-hero-wall">
+            <div class="card">
+                <div class="card-title">英雄墙（按好感度排序）</div>
+                <div class="hero-grid" id="heroGrid">
+                    <p class="placeholder-text">暂无人物</p>
+                </div>
+            </div>
+        </section>
+
+        <!-- Tab: 勋章墙 -->
+        <section class="tab-pane" id="tab-medal-wall">
+            <!-- 勋章统计环形图 -->
+            <div class="card">
+                <div class="card-title">勋章统计</div>
+                <div class="medal-stats-row">
+                    <div class="medal-stat-item">
+                        <canvas id="medalStatsRing" width="120" height="120"></canvas>
+                    </div>
+                    <div class="medal-stat-details">
+                        <div class="stat-line"><span class="stat-label">总勋章</span><span class="stat-val" id="medalTotalCount">--</span></div>
+                        <div class="stat-line"><span class="stat-label">已解锁</span><span class="stat-val stat-gold" id="medalUnlockedCount">--</span></div>
+                        <div class="stat-line"><span class="stat-label">积分</span><span class="stat-val" id="medalPoints">--</span></div>
+                        <div class="stat-line"><span class="stat-label">完成率</span><span class="stat-val" id="medalCompletionRate">--</span></div>
+                    </div>
+                </div>
+            </div>
+            <div class="card">
+                <div class="card-title">
+                    勋章墙
+                    <select id="medalFilter">
+                        <option value="all">全部</option>
+                        <option value="unlocked">已获得</option>
+                        <option value="locked">未获得</option>
+                    </select>
+                    <select id="medalCategoryFilter">
+                        <option value="all">全部分类</option>
+                        <option value="novice">新手</option>
+                        <option value="relation">关系</option>
+                        <option value="task">任务</option>
+                        <option value="social">社交</option>
+                        <option value="special">特殊</option>
+                    </select>
+                </div>
+                <div class="medal-grid" id="medalGrid">
+                    <p class="placeholder-text">加载中...</p>
+                </div>
+            </div>
+        </section>
+
+        <!-- Tab: 数字分身 -->
+        <section class="tab-pane" id="tab-twin">
+            <!-- 准确率显示 -->
+            <div class="card">
+                <div class="card-title">
+                    数字分身准确率
+                    <button class="btn-secondary btn-sm" id="refreshTwinAccuracyBtn">刷新</button>
+                </div>
+                <div class="twin-accuracy-row">
+                    <div class="accuracy-item">
+                        <div class="accuracy-num" id="twinAccuracyOverall">--</div>
+                        <div class="accuracy-label">综合准确率</div>
+                    </div>
+                    <div class="accuracy-item">
+                        <div class="accuracy-num" id="twinAccuracyTotal">--</div>
+                        <div class="accuracy-label">总预测数</div>
+                    </div>
+                    <div class="accuracy-item">
+                        <div class="accuracy-num" id="twinAccuracyCorrect">--</div>
+                        <div class="accuracy-label">准确次数</div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- 预测反应 -->
+            <div class="card">
+                <div class="card-title">预测反应</div>
+                <textarea id="twinPredictInput" placeholder="描述你即将做的行为，例如：今晚主动约她去看电影..." style="min-height:80px;"></textarea>
+                <div class="action-row">
+                    <button class="btn-primary" id="twinPredictBtn">预测TA的反应</button>
+                </div>
+                <div id="twinPredictResult" class="twin-result-box" style="display:none;">
+                    <div class="result-section">
+                        <div class="result-label">预测情绪</div>
+                        <div class="result-value" id="twinPredictEmotion">--</div>
+                    </div>
+                    <div class="result-section">
+                        <div class="result-label">概率</div>
+                        <div class="result-value" id="twinPredictProb">--</div>
+                    </div>
+                    <div class="result-section">
+                        <div class="result-label">建议</div>
+                        <div class="result-value" id="twinPredictAdvice">--</div>
+                    </div>
+                    <div class="feedback-row">
+                        <span class="feedback-label">预测准确吗？</span>
+                        <button class="btn-secondary btn-feedback" data-score="1" id="twinFbAccurate">✅ 准确</button>
+                        <button class="btn-secondary btn-feedback" data-score="0" id="twinFbPartial">😐 部分</button>
+                        <button class="btn-secondary btn-feedback" data-score="-1" id="twinFbWrong">❌ 不准</button>
+                    </div>
+                </div>
+            </div>
+
+            <!-- 模拟回复 -->
+            <div class="card">
+                <div class="card-title">模拟回复</div>
+                <textarea id="twinSimulateInput" placeholder="输入对话上下文，例如：我发了'在干嘛'，她回'刚吃完饭'..." style="min-height:80px;"></textarea>
+                <div class="action-row">
+                    <button class="btn-primary" id="twinSimulateBtn">模拟TA会怎么回</button>
+                </div>
+                <div id="twinSimulateResult" class="twin-result-box" style="display:none;">
+                    <div class="result-section">
+                        <div class="result-label">模拟回复</div>
+                        <div class="result-value reply-preview" id="twinSimulateReply">--</div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- A/B对比 -->
+            <div class="card">
+                <div class="card-title">A/B 方案对比</div>
+                <div class="ab-compare-grid">
+                    <div class="ab-option">
+                        <div class="ab-label">方案 A</div>
+                        <textarea id="twinOptionA" placeholder="方案A内容..." style="min-height:60px;"></textarea>
+                    </div>
+                    <div class="ab-vs">VS</div>
+                    <div class="ab-option">
+                        <div class="ab-label">方案 B</div>
+                        <textarea id="twinOptionB" placeholder="方案B内容..." style="min-height:60px;"></textarea>
+                    </div>
+                </div>
+                <div class="action-row">
+                    <button class="btn-primary" id="twinCompareBtn">对比分析</button>
+                </div>
+                <div id="twinCompareResult" class="twin-result-box" style="display:none;">
+                    <div class="result-section">
+                        <div class="result-label">推荐方案</div>
+                        <div class="result-value" id="twinCompareWinner">--</div>
+                    </div>
+                    <div class="result-section">
+                        <div class="result-label">对比分析</div>
+                        <div class="result-value" id="twinCompareAnalysis">--</div>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <!-- Tab: 任务引擎 -->
+        <section class="tab-pane" id="tab-tasks">
+            <!-- 限时任务提示区 -->
+            <div class="card limited-task-card" id="limitedTaskCard" style="display:none;">
+                <div class="card-title">⏰ 限时任务</div>
+                <div id="limitedTaskContent"></div>
+            </div>
+
+            <!-- 生成主线任务 -->
+            <div class="card">
+                <div class="card-title">生成主线任务</div>
+                <div class="setting-row">
+                    <span class="setting-label">关系阶段</span>
+                    <select id="taskStageSelect">
+                        <option value="0">0 - 初识陌生人</option>
+                        <option value="1">1 - 普通朋友</option>
+                        <option value="2">2 - 暧昧期</option>
+                        <option value="3">3 - 接近告白</option>
+                        <option value="4">4 - 恋爱初期</option>
+                        <option value="5">5 - 稳定恋爱</option>
+                        <option value="6">6 - 深度关系</option>
+                    </select>
+                </div>
+                <div class="action-row">
+                    <button class="btn-primary" id="generateMainTasksBtn">🎯 生成主线任务</button>
+                </div>
+            </div>
+
+            <!-- 当前任务列表 -->
+            <div class="card">
+                <div class="card-title">
+                    当前任务
+                    <button class="btn-secondary btn-sm" id="refreshTasksBtn">刷新</button>
+                </div>
+                <div id="activeTaskList">
+                    <p class="placeholder-text">暂无任务</p>
+                </div>
+            </div>
+        </section>
+
+        <!-- Tab: 攻略 -->
+        <section class="tab-pane" id="tab-guide">
+            <!-- 生成攻略 -->
+            <div class="card">
+                <div class="card-title">
+                    生成攻略
+                    <div>
+                        <button class="btn-secondary counseling-mode active" data-guide-mode="self">自我成长视角</button>
+                        <button class="btn-secondary counseling-mode" data-guide-mode="target">对象视角</button>
+                    </div>
+                </div>
+                <textarea id="guideQuestionInput" placeholder="输入你的问题，例如：第一次约会应该注意什么？..." style="min-height:80px;"></textarea>
+                <div class="action-row">
+                    <button class="btn-primary" id="generateGuideBtn">📖 生成攻略</button>
+                </div>
+                <div id="guideResult" class="twin-result-box" style="display:none;">
+                    <div class="result-section">
+                        <div class="result-label">📊 分析</div>
+                        <div class="result-value" id="guideAnalysis">--</div>
+                    </div>
+                    <div class="result-section">
+                        <div class="result-label">♟ 策略</div>
+                        <div class="result-value" id="guideStrategy">--</div>
+                    </div>
+                    <div class="result-section">
+                        <div class="result-label">📋 行动计划</div>
+                        <div class="result-value" id="guidePlan">--</div>
+                    </div>
+                    <div class="result-section">
+                        <div class="result-label">⚠ 风险提示</div>
+                        <div class="result-value" id="guideRisk">--</div>
+                    </div>
+                    <div class="result-section">
+                        <div class="result-label">🎯 预期效果</div>
+                        <div class="result-value" id="guideExpectation">--</div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- 攻略库搜索 -->
+            <div class="card">
+                <div class="card-title">攻略库搜索</div>
+                <div class="search-row">
+                    <input type="text" id="guideSearchInput" placeholder="输入关键词搜索历史攻略和知识库..." style="flex:1;">
+                    <button class="btn-primary" id="guideSearchBtn">搜索</button>
+                </div>
+                <div id="guideSearchResults" style="margin-top:12px;">
+                    <p class="placeholder-text">输入关键词开始搜索</p>
+                </div>
+            </div>
+
+            <!-- 攻略历史 -->
+            <div class="card">
+                <div class="card-title">
+                    攻略历史
+                    <select id="guideHistoryFilter">
+                        <option value="all">全部</option>
+                        <option value="self">自我成长</option>
+                        <option value="target">对象视角</option>
+                    </select>
+                </div>
+                <div id="guideHistoryList">
+                    <p class="placeholder-text">暂无历史攻略</p>
+                </div>
+            </div>
+        </section>
+
+        <!-- Tab: 财务分析 -->
+        <section class="tab-pane" id="tab-finance">
+            <!-- 生成报告 -->
+            <div class="card">
+                <div class="card-title">
+                    财务分析报告
+                    <button class="btn-primary btn-sm" id="generateFinanceReportBtn">生成报告</button>
+                </div>
+                <div id="financeReportContent">
+                    <p class="placeholder-text">点击「生成报告」获取当前对象的财务分析</p>
+                </div>
+            </div>
+
+            <!-- 需求可行性检查 -->
+            <div class="card">
+                <div class="card-title">需求可行性检查</div>
+                <div class="setting-row">
+                    <span class="setting-label">物品名称</span>
+                    <input type="text" id="demandItemName" placeholder="例如：包包、手机、项链...">
+                </div>
+                <div class="setting-row">
+                    <span class="setting-label">预估价值 (元)</span>
+                    <input type="number" id="demandItemValue" placeholder="0" min="0">
+                </div>
+                <div class="action-row">
+                    <button class="btn-primary" id="checkDemandBtn">🔍 检查可行性</button>
+                </div>
+                <div id="demandResult" class="twin-result-box" style="display:none;">
+                    <div class="result-section">
+                        <div class="result-label">风险等级</div>
+                        <div class="result-value" id="demandRiskLevel">--</div>
+                    </div>
+                    <div class="result-section">
+                        <div class="result-label">建议</div>
+                        <div class="result-value" id="demandAdvice">--</div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- 支出记录 -->
+            <div class="card">
+                <div class="card-title">记录支出</div>
+                <div class="setting-row">
+                    <span class="setting-label">金额 (元)</span>
+                    <input type="number" id="expenseAmount" placeholder="0" min="0">
+                </div>
+                <div class="setting-row">
+                    <span class="setting-label">描述</span>
+                    <input type="text" id="expenseDesc" placeholder="例如：请吃饭、买礼物...">
+                </div>
+                <div class="setting-row">
+                    <span class="setting-label">方向</span>
+                    <select id="expenseDirection">
+                        <option value="out">我支出</option>
+                        <option value="in">TA支出</option>
+                    </select>
+                </div>
+                <div class="action-row">
+                    <button class="btn-primary" id="recordExpenseBtn">📝 记录支出</button>
+                </div>
+            </div>
+
+            <!-- 支出汇总 -->
+            <div class="card">
+                <div class="card-title">
+                    支出汇总（近30天）
+                    <button class="btn-secondary btn-sm" id="refreshExpenseBtn">刷新</button>
+                </div>
+                <div class="expense-summary-row">
+                    <div class="expense-stat">
+                        <div class="expense-num" id="expenseTotalAmount">¥0</div>
+                        <div class="expense-label">总支出</div>
+                    </div>
+                    <div class="expense-stat">
+                        <div class="expense-num" id="expenseCount">0</div>
+                        <div class="expense-label">笔数</div>
+                    </div>
+                    <div class="expense-stat">
+                        <div class="expense-num" id="expenseAvg">¥0</div>
+                        <div class="expense-label">平均/笔</div>
+                    </div>
+                </div>
+                <div id="expenseTrend" style="margin-top:12px;"></div>
+            </div>
+        </section>
+
+        <!-- ============ Tab: 数据统计（阶段四） ============ -->
+        <section class="tab-pane" id="tab-stats">
+            <!-- 时间范围选择 -->
+            <div class="card">
+                <div class="card-title">
+                    数据统计
+                    <div class="range-switch" id="statsRangeSwitch">
+                        <button class="btn-secondary btn-sm range-btn active" data-days="7">近7天</button>
+                        <button class="btn-secondary btn-sm range-btn" data-days="30">近30天</button>
+                        <button class="btn-secondary btn-sm range-btn" data-days="90">近90天</button>
+                    </div>
+                </div>
+                <!-- 仪表盘卡片网格 -->
+                <div class="dashboard-grid" id="dashboardGrid">
+                    <div class="dash-card"><div class="dash-num" id="dashMsgTotal">--</div><div class="dash-label">消息总数</div></div>
+                    <div class="dash-card"><div class="dash-num" id="dashTaskDone">--</div><div class="dash-label">任务完成</div></div>
+                    <div class="dash-card"><div class="dash-num" id="dashTaskActive">--</div><div class="dash-label">进行中任务</div></div>
+                    <div class="dash-card"><div class="dash-num" id="dashAffection">--</div><div class="dash-label">当前好感度</div></div>
+                    <div class="dash-card"><div class="dash-num" id="dashMedal">--</div><div class="dash-label">已解锁勋章</div></div>
+                    <div class="dash-card"><div class="dash-num" id="dashDays">--</div><div class="dash-label">使用天数</div></div>
+                </div>
+            </div>
+
+            <!-- 消息统计 -->
+            <div class="card">
+                <div class="card-title">消息统计（按天发送/接收对比）</div>
+                <canvas id="msgBarChart" class="chart-canvas" height="220"></canvas>
+                <div class="msg-extra-row">
+                    <div class="msg-dir-block">
+                        <div class="block-title">方向比例</div>
+                        <canvas id="msgDirPie" class="chart-canvas chart-pie" height="160"></canvas>
+                        <div id="msgDirLegend" class="chart-legend"></div>
+                    </div>
+                    <div class="msg-dir-block">
+                        <div class="block-title">时段分布</div>
+                        <canvas id="msgHourPie" class="chart-canvas chart-pie" height="160"></canvas>
+                        <div id="msgHourLegend" class="chart-legend"></div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- 好感度趋势 -->
+            <div class="card">
+                <div class="card-title">
+                    好感度趋势
+                    <span class="trend-summary">
+                        <span>7天变化 <b id="affDelta7">--</b></span>
+                        <span>30天变化 <b id="affDelta30">--</b></span>
+                        <span>最高 <b id="affHigh">--</b></span>
+                        <span>最低 <b id="affLow">--</b></span>
+                    </span>
+                </div>
+                <canvas id="affLineChart" class="chart-canvas" height="220"></canvas>
+            </div>
+
+            <!-- 多对象对比 -->
+            <div class="card">
+                <div class="card-title">多对象对比</div>
+                <div class="table-wrap">
+                    <table class="compare-table" id="relationCompareTable">
+                        <thead><tr>
+                            <th>昵称</th><th>好感度</th><th>任务</th><th>消息</th><th>勋章</th>
+                        </tr></thead>
+                        <tbody><tr><td colspan="5" class="placeholder-cell">加载中...</td></tr></tbody>
+                    </table>
+                </div>
+            </div>
+
+            <!-- 周报 -->
+            <div class="card">
+                <div class="card-title">
+                    本周周报
+                    <button class="btn-secondary btn-sm" id="refreshWeeklyBtn">刷新</button>
+                </div>
+                <div id="weeklyReportBox"><p class="placeholder-text">暂无周报数据</p></div>
+            </div>
+        </section>
+
+        <!-- ============ Tab: 语音（阶段四） ============ -->
+        <section class="tab-pane" id="tab-voice">
+            <!-- 服务状态 -->
+            <div class="card" id="voiceStatusCard">
+                <div class="card-title">语音服务状态</div>
+                <div id="voiceStatusBox"><p class="placeholder-text">加载中...</p></div>
+                <div class="voice-fallback" id="voiceFallback" style="display:none;">
+                    ⚠️ 语音服务当前不可用。请检查本地模型是否已下载，或在设置中配置。
+                </div>
+            </div>
+
+            <!-- 录音主区 -->
+            <div class="card voice-center-card">
+                <div class="card-title">语音输入</div>
+                <div class="mic-wrap">
+                    <button class="mic-btn" id="micBtn" title="点击开始录音">🎙</button>
+                    <div class="mic-tip" id="micTip">点击麦克风开始录音</div>
+                </div>
+                <div class="voice-actions">
+                    <button class="btn-primary" id="stopRecognizeBtn">停止并识别</button>
+                    <button class="btn-secondary" id="recognizeFillBtn">识别并填入微信</button>
+                </div>
+                <div class="voice-result" id="voiceResult" style="display:none;">
+                    <div class="block-title">识别文本</div>
+                    <div class="voice-result-text" id="voiceRecognizedText">--</div>
+                </div>
+            </div>
+
+            <!-- 外部音频文件 -->
+            <div class="card">
+                <div class="card-title">外部音频文件识别</div>
+                <div class="search-row">
+                    <input type="text" id="voiceFilePath" placeholder="输入音频文件路径，例如 D:\\record.wav" style="flex:1;">
+                    <button class="btn-primary" id="transcribeFileBtn">识别文件</button>
+                </div>
+                <div class="voice-result" id="fileTranscribeResult" style="display:none;">
+                    <div class="block-title">文件识别结果</div>
+                    <div class="voice-result-text" id="fileTranscribeText">--</div>
+                </div>
+            </div>
+        </section>
+
+        <!-- ============ Tab: OCR（阶段四） ============ -->
+        <section class="tab-pane" id="tab-ocr">
+            <div class="card" id="ocrStatusCard">
+                <div class="card-title">OCR 服务状态</div>
+                <div id="ocrStatusBox"><p class="placeholder-text">加载中...</p></div>
+                <div class="voice-fallback" id="ocrFallback" style="display:none;">
+                    ⚠️ OCR 服务当前不可用，请检查 PaddleOCR / 依赖是否已安装。
+                </div>
+            </div>
+
+            <div class="card">
+                <div class="card-title">截图识别</div>
+                <div class="ocr-action-row">
+                    <button class="btn-primary" id="captureOcrBtn">🖼 截屏并识别</button>
+                    <button class="btn-secondary" id="captureWechatOcrBtn">💬 微信区域截屏识别</button>
+                </div>
+                <div class="ocr-preview-wrap" id="ocrPreviewWrap" style="display:none;">
+                    <div class="block-title">截图预览</div>
+                    <img id="ocrPreviewImg" class="ocr-preview-img" alt="截图预览">
+                </div>
+                <div class="ocr-result" id="ocrResultBox" style="display:none;">
+                    <div class="block-title">识别全文</div>
+                    <div class="ocr-fulltext" id="ocrFullText">--</div>
+                    <div class="block-title" style="margin-top:10px;">分行文本（含置信度）</div>
+                    <div class="ocr-lines" id="ocrLines"></div>
+                </div>
+            </div>
+
+            <div class="card">
+                <div class="card-title">图片文件识别</div>
+                <div class="search-row">
+                    <input type="text" id="ocrImagePath" placeholder="输入图片文件路径，例如 D:\\shot.png" style="flex:1;">
+                    <button class="btn-primary" id="ocrFileBtn">识别图片</button>
+                </div>
+                <div class="ocr-result" id="ocrFileResult" style="display:none;">
+                    <div class="block-title">图片识别全文</div>
+                    <div class="ocr-fulltext" id="ocrFileText">--</div>
+                </div>
+            </div>
+        </section>
+
+        <!-- ============ Tab: 插件中心（阶段四） ============ -->
+        <section class="tab-pane" id="tab-plugins">
+            <div class="card">
+                <div class="card-title">
+                    技能列表
+                    <button class="btn-secondary btn-sm" id="refreshSkillsBtn">刷新</button>
+                </div>
+                <div class="skill-grid" id="skillGrid">
+                    <p class="placeholder-text">暂无技能</p>
+                </div>
+                <div class="ocr-result" id="skillExecResult" style="display:none;">
+                    <div class="block-title">技能执行结果</div>
+                    <div class="skill-exec-content" id="skillExecContent">--</div>
+                </div>
+            </div>
+
+            <div class="card">
+                <div class="card-title">
+                    插件列表
+                    <button class="btn-secondary btn-sm" id="refreshPluginsBtn">刷新</button>
+                </div>
+                <div class="plugin-grid" id="pluginGrid">
+                    <p class="placeholder-text">暂无插件（plugins/ 目录为空）</p>
+                </div>
+            </div>
+        </section>
+
+        <!-- ============ Tab: 长期记忆（阶段四） ============ -->
+        <section class="tab-pane" id="tab-memory">
+            <div class="card">
+                <div class="card-title">记忆统计</div>
+                <div class="memory-stats-row" id="memoryStatsRow">
+                    <div class="dash-card"><div class="dash-num" id="memTotal">--</div><div class="dash-label">总数</div></div>
+                    <div class="dash-card"><div class="dash-num" id="memActive">--</div><div class="dash-label">活跃</div></div>
+                    <div class="dash-card"><div class="dash-num" id="memForgot">--</div><div class="dash-label">已遗忘</div></div>
+                </div>
+                <div id="memoryTypeStats" class="memory-type-stats"></div>
+            </div>
+
+            <div class="card">
+                <div class="card-title">添加记忆</div>
+                <div class="setting-row">
+                    <span class="setting-label">类型</span>
+                    <select id="memAddType">
+                        <option value="fact">事实</option>
+                        <option value="lesson">教训</option>
+                        <option value="conclusion">结论</option>
+                    </select>
+                </div>
+                <div class="setting-row">
+                    <span class="setting-label">分类</span>
+                    <input type="text" id="memAddCategory" placeholder="例如：偏好/雷区/约会...">
+                </div>
+                <div class="setting-row">
+                    <span class="setting-label">内容</span>
+                    <input type="text" id="memAddContent" placeholder="记忆内容...">
+                </div>
+                <div class="action-row">
+                    <button class="btn-primary" id="addMemoryBtn">➕ 添加记忆</button>
+                </div>
+            </div>
+
+            <div class="card">
+                <div class="card-title">
+                    记忆列表
+                    <div class="mem-filter-switch" id="memFilterSwitch">
+                        <button class="btn-secondary btn-sm range-btn active" data-mem-type="all">全部</button>
+                        <button class="btn-secondary btn-sm range-btn" data-mem-type="fact">事实</button>
+                        <button class="btn-secondary btn-sm range-btn" data-mem-type="lesson">教训</button>
+                        <button class="btn-secondary btn-sm range-btn" data-mem-type="conclusion">结论</button>
+                    </div>
+                </div>
+                <div class="search-row">
+                    <input type="text" id="memorySearchInput" placeholder="关键词搜索记忆..." style="flex:1;">
+                    <button class="btn-primary" id="memorySearchBtn">搜索</button>
+                </div>
+                <div class="memory-list" id="memoryList" style="margin-top:12px;">
+                    <p class="placeholder-text">暂无记忆</p>
+                </div>
+            </div>
+        </section>
+
+        <!-- ============ Tab: 备份中心（阶段四） ============ -->
+        <section class="tab-pane" id="tab-backup">
+            <div class="card">
+                <div class="card-title">备份统计</div>
+                <div class="memory-stats-row" id="backupStatsRow">
+                    <div class="dash-card"><div class="dash-num" id="bakTotal">--</div><div class="dash-label">备份总数</div></div>
+                    <div class="dash-card"><div class="dash-num" id="bakSize">--</div><div class="dash-label">总大小</div></div>
+                    <div class="dash-card"><div class="dash-num" id="bakLatest">--</div><div class="dash-label">最新备份</div></div>
+                </div>
+            </div>
+
+            <div class="card">
+                <div class="card-title">操作</div>
+                <div class="action-row">
+                    <button class="btn-primary" id="createBackupBtn">🆕 创建备份</button>
+                    <button class="btn-secondary" id="exportAllDataBtn">📤 导出全部数据</button>
+                </div>
+                <div class="ocr-result" id="backupActionResult" style="display:none;">
+                    <div class="block-title">操作结果</div>
+                    <div class="voice-result-text" id="backupActionText">--</div>
+                </div>
+            </div>
+
+            <div class="card">
+                <div class="card-title">
+                    备份列表
+                    <button class="btn-secondary btn-sm" id="refreshBackupBtn">刷新</button>
+                </div>
+                <div class="table-wrap">
+                    <table class="compare-table" id="backupListTable">
+                        <thead><tr>
+                            <th>ID</th><th>时间</th><th>大小</th><th>备注</th><th>操作</th>
+                        </tr></thead>
+                        <tbody><tr><td colspan="5" class="placeholder-cell">暂无备份</td></tr></tbody>
+                    </table>
+                </div>
+            </div>
+        </section>
+
+    </main>
+
+    <!-- ============ 右侧面板 ============ -->
+    <aside class="right-panel" id="rightPanel">
+        <div class="panel-section collapsible" id="taskPanel">
+            <h4 id="taskPanelToggle">📋 任务面板 ▾</h4>
+            <div class="panel-body" id="taskList">
+                <p class="placeholder-text">暂无任务</p>
+            </div>
+        </div>
+        <div class="panel-section collapsible" id="memoPanel">
+            <h4 id="memoPanelToggle">📝 备忘录（喜恶）▾</h4>
+            <div class="panel-body" id="memoList">
+                <p class="placeholder-text">暂无记录</p>
+            </div>
+        </div>
+        <button class="btn-ghost" id="collapsePanelBtn" style="width:100%;">收起面板 «</button>
+    </aside>
+
+    <!-- ============ 底部栏 ============ -->
+    <footer class="bottom-bar">
+        <span class="stat-item">等级 <span class="stat-value" id="statLevel">Lv.1</span></span>
+        <span class="stat-item">金币 <span class="stat-value" id="statCoins">0</span></span>
+        <span class="stat-item">勋章 <span class="stat-value" id="statMedals">0/25</span></span>
+        <div class="bottom-right">
+            <button class="btn-ghost" id="openDataStatsBtn">数据统计</button>
+            <button class="btn-ghost" id="bottomSettingsBtn">设置</button>
+        </div>
+    </footer>
+</div>
+
+<!-- ============ 设置中心模态框 ============ -->
+<div class="modal" id="settingsModal">
+    <div class="modal-content">
+        <div class="modal-header">
+            <h2>设置中心</h2>
+            <button class="icon-btn" data-close-modal="settingsModal">✕</button>
+        </div>
+
+        <div class="settings-group">
+            <h3>大模型</h3>
+            <div class="setting-row">
+                <span class="setting-label">API Key</span>
+                <input type="password" data-config="llm.api_key" placeholder="sk-...">
+            </div>
+            <div class="setting-row">
+                <span class="setting-label">Base URL</span>
+                <input type="text" data-config="llm.base_url" placeholder="https://api.openai.com/v1">
+            </div>
+            <div class="setting-row">
+                <span class="setting-label">模型名称</span>
+                <input type="text" data-config="llm.model" placeholder="gpt-4o-mini">
+            </div>
+            <div class="setting-row">
+                <span class="setting-label">温度 (temperature)</span>
+                <input type="number" step="0.1" min="0" max="2" data-config="llm.temperature">
+            </div>
+        </div>
+
+        <div class="settings-group">
+            <h3>代理设置</h3>
+            <div class="setting-row">
+                <span class="setting-label">启用代理</span>
+                <label class="switch">
+                    <input type="checkbox" data-config="proxy.enabled">
+                    <span class="slider"></span>
+                </label>
+            </div>
+            <div class="setting-row">
+                <span class="setting-label">代理类型</span>
+                <select data-config="proxy.type">
+                    <option value="http">HTTP</option>
+                    <option value="socks5">SOCKS5</option>
+                </select>
+            </div>
+            <div class="setting-row">
+                <span class="setting-label">代理地址</span>
+                <input type="text" data-config="proxy.host" placeholder="127.0.0.1">
+            </div>
+            <div class="setting-row">
+                <span class="setting-label">代理端口</span>
+                <input type="number" data-config="proxy.port" placeholder="7890">
+            </div>
+            <div class="setting-row">
+                <span class="setting-label">用户名（可选）</span>
+                <input type="text" data-config="proxy.username" placeholder="">
+            </div>
+            <div class="setting-row">
+                <span class="setting-label">密码（可选）</span>
+                <input type="password" data-config="proxy.password" placeholder="">
+            </div>
+            <div class="setting-row">
+                <span class="setting-label">订阅链接（可选）</span>
+                <input type="text" data-config="proxy.subscribe_url" placeholder="https://...">
+            </div>
+            <div class="setting-row">
+                <span class="setting-label">用于大模型</span>
+                <label class="switch">
+                    <input type="checkbox" data-config="proxy.use_for_llm" checked>
+                    <span class="slider"></span>
+                </label>
+            </div>
+            <div class="setting-row">
+                <button class="btn btn-secondary" onclick="testProxy()">测试连接</button>
+                <button class="btn btn-secondary" onclick="enableSystemProxy()">系统代理开</button>
+                <button class="btn btn-secondary" onclick="disableSystemProxy()">系统代理关</button>
+            </div>
+            <div id="proxyStatus" style="font-size:12px;color:var(--text-secondary);margin-top:8px;"></div>
+        </div>
+
+        <!-- 功能开关组（新增） -->
+        <div class="settings-group" id="featureTogglesGroup">
+            <h3>功能开关</h3>
+            <label class="toggle-row">
+                <div class="toggle-row-text">
+                    <div class="toggle-row-name">动效背景</div>
+                    <div class="toggle-row-desc">关闭后停止呼吸光斑动画</div>
+                </div>
+                <input type="checkbox" class="toggle-switch" id="toggleAnimBackground" checked>
+            </label>
+            <label class="toggle-row">
+                <div class="toggle-row-text">
+                    <div class="toggle-row-name">悬浮卡透明度</div>
+                    <div class="toggle-row-desc">调节代聊悬浮卡的半透明程度</div>
+                </div>
+                <input type="range" class="toggle-range" id="toggleOverlayOpacity" min="0.3" max="1.0" step="0.05" value="0.85">
+            </label>
+            <label class="toggle-row">
+                <div class="toggle-row-text">
+                    <div class="toggle-row-name">本地AI扫描</div>
+                    <div class="toggle-row-desc">关闭后停止本地模型扫描</div>
+                </div>
+                <input type="checkbox" class="toggle-switch" id="toggleLocalAiScan" checked>
+            </label>
+            <label class="toggle-row">
+                <div class="toggle-row-text">
+                    <div class="toggle-row-name">浏览器AI中枢</div>
+                    <div class="toggle-row-desc">启用浏览器侧 AI 调度中枢</div>
+                </div>
+                <input type="checkbox" class="toggle-switch" id="toggleBrowserAiHub">
+            </label>
+            <label class="toggle-row">
+                <div class="toggle-row-text">
+                    <div class="toggle-row-name">免费模型自动轮换</div>
+                    <div class="toggle-row-desc">免费额度用尽后自动切换下一可用模型</div>
+                </div>
+                <input type="checkbox" class="toggle-switch" id="toggleFreeModelRotate" checked>
+            </label>
+        </div>
+
+        <div class="settings-group">
+            <h3>模型路由</h3>
+            <div class="setting-row">
+                <span class="setting-label">聊天分析模型</span>
+                <input type="text" data-config="router.analysis_model">
+            </div>
+            <div class="setting-row">
+                <span class="setting-label">咨询模型</span>
+                <input type="text" data-config="router.counseling_model">
+            </div>
+            <div class="setting-row">
+                <span class="setting-label">代聊模型</span>
+                <input type="text" data-config="router.chat_model">
+            </div>
+        </div>
+
+        <div class="settings-group">
+            <h3>监听</h3>
+            <div class="setting-row">
+                <span class="setting-label">启用微信监听</span>
+                <div class="switch-toggle" data-config="listen.enabled"></div>
+            </div>
+            <div class="setting-row">
+                <span class="setting-label">监听间隔 (秒)</span>
+                <input type="number" data-config="listen.interval" min="1">
+            </div>
+        </div>
+
+        <div class="settings-group">
+            <h3>桌宠 / 悬浮球</h3>
+            <div class="setting-row">
+                <span class="setting-label">桌宠透明度</span>
+                <input type="number" step="0.05" min="0.2" max="1" data-config="pet.opacity">
+            </div>
+        </div>
+
+        <div class="settings-group">
+            <h3>语音</h3>
+            <div class="setting-row">
+                <span class="setting-label">播报音色</span>
+                <select data-config="voice.voice">
+                    <option value="female">女声</option>
+                    <option value="male">男声</option>
+                </select>
+            </div>
+        </div>
+
+        <div class="settings-group">
+            <h3>回复</h3>
+            <div class="setting-row">
+                <span class="setting-label">自动回复</span>
+                <div class="switch-toggle" data-config="reply.auto"></div>
+            </div>
+            <div class="setting-row">
+                <span class="setting-label">回复条数</span>
+                <input type="number" data-config="reply.count" min="1" max="10">
+            </div>
+        </div>
+
+        <div class="settings-group">
+            <h3>隐私</h3>
+            <div class="setting-row">
+                <span class="setting-label">本地加密存储</span>
+                <div class="switch-toggle" data-config="privacy.encrypt"></div>
+            </div>
+        </div>
+
+        <div class="settings-group">
+            <h3>通知</h3>
+            <div class="setting-row">
+                <span class="setting-label">新消息桌面通知</span>
+                <div class="switch-toggle" data-config="notify.desktop"></div>
+            </div>
+            <div class="setting-row">
+                <span class="setting-label">音效提醒</span>
+                <div class="switch-toggle" data-config="notify.sound"></div>
+            </div>
+        </div>
+
+        <div class="settings-group">
+            <h3>数据</h3>
+            <div class="setting-row">
+                <button class="btn-secondary" id="exportDataBtn">导出数据</button>
+                <button class="btn-secondary" id="importDataBtn">导入数据</button>
+                <button class="btn-secondary" id="resetDataBtn">清空数据</button>
+            </div>
+        </div>
+
+        <div class="settings-group">
+            <h3>快捷键</h3>
+            <div class="setting-row">
+                <span class="setting-label">呼出主窗口</span>
+                <input type="text" data-config="hotkey.open_window" placeholder="Ctrl+Shift+L">
+            </div>
+        </div>
+
+        <div class="settings-group">
+            <h3>界面</h3>
+            <div class="setting-row">
+                <span class="setting-label">亮色主题</span>
+                <div class="switch-toggle" data-config="ui.light_theme" id="lightThemeToggle"></div>
+            </div>
+        </div>
+
+        <div class="settings-group">
+            <h3>其他</h3>
+            <div class="setting-row">
+                <span class="setting-label">开机自启动</span>
+                <div class="switch-toggle" data-config="other.autostart"></div>
+            </div>
+        </div>
+
+        <div class="settings-group">
+            <h3>高级功能</h3>
+            <div class="adv-feature-grid">
+                <button class="btn-secondary btn-sm adv-feature-btn" data-tab="twin">🪞 数字分身</button>
+                <button class="btn-secondary btn-sm adv-feature-btn" data-tab="tasks">🎯 任务引擎</button>
+                <button class="btn-secondary btn-sm adv-feature-btn" data-tab="guide">📖 攻略</button>
+                <button class="btn-secondary btn-sm adv-feature-btn" data-tab="finance">💰 财务分析</button>
+                <button class="btn-secondary btn-sm adv-feature-btn" data-tab="stats">📈 数据统计</button>
+                <button class="btn-secondary btn-sm adv-feature-btn" data-tab="plugins">🧩 插件管理</button>
+                <button class="btn-secondary btn-sm adv-feature-btn" data-tab="memory">🧠 长期记忆</button>
+                <button class="btn-secondary btn-sm adv-feature-btn" data-tab="backup">💾 数据备份</button>
+            </div>
+        </div>
+
+        <div style="text-align:right;">
+            <button class="btn-primary" id="saveSettingsBtn">保存全部</button>
+        </div>
+    </div>
+</div>
+
+<!-- ============ 新手引导 ============ -->
+<div class="onboarding-overlay" id="onboardingOverlay">
+    <div class="onboarding-card">
+        <h2>欢迎使用 LoveAI ❤</h2>
+        <p>这是一款恋爱辅助桌面应用，帮你分析聊天、提升好感度。</p>
+        <p style="color:var(--gold-primary)">第一步：请先在「设置 → 大模型」中配置你的 LLM API Key。</p>
+        <button class="btn-primary" id="onboardingNextBtn">开始使用</button>
+    </div>
+</div>
+
+<!-- ============ 弹幕层 ============ -->
+<div class="danmaku-layer" id="danmakuLayer"></div>
+
+<script src="js/bridge.js"></script>
+<script src="js/app.js"></script>
+<script>
+(function () {
+    function esc(s) {
+        return String(s == null ? '' : s).replace(/[&<>"]/g, function (c) {
+            return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c];
+        });
+    }
+    function renderValue(v) {
+        if (v == null) return '';
+        if (typeof v === 'number' || typeof v === 'boolean') return esc(v);
+        if (typeof v === 'string') return esc(v);
+        if (Array.isArray(v)) {
+            if (!v.length) return '<span style="color:#666">—</span>';
+            return '<ul style="margin:4px 0 4px 16px;padding:0;">' + v.map(function (it) {
+                return '<li style="margin:2px 0;">' + renderValue(it) + '</li>';
+            }).join('') + '</ul>';
+        }
+        if (typeof v === 'object') {
+            var rows = Object.keys(v).map(function (k) {
+                return '<div style="display:flex;gap:8px;margin:2px 0;">' +
+                    '<span style="color:#8ab4f8;min-width:96px;">' + esc(k) + '</span>' +
+                    '<span style="flex:1;color:#ccc;word-break:break-word;">' + renderValue(v[k]) + '</span></div>';
+            }).join('');
+            return '<div style="background:rgba(255,255,255,0.03);border-radius:6px;padding:6px 8px;">' + rows + '</div>';
+        }
+        return esc(v);
+    }
+
+    function loadDiag() {
+        var btn = document.getElementById('viewDiagReportBtn');
+        var pid = window._currentPersonId;
+        if (!pid) { alert('请先在上方选择/创建一个对象'); return; }
+        btn.disabled = true; btn.textContent = '生成中…';
+        window.call('get_diagnostic_report', pid).then(function (rep) {
+            btn.disabled = false; btn.textContent = '📄 查看完整诊断报告';
+            renderDiag(rep);
+        }).catch(function (e) {
+            btn.disabled = false; btn.textContent = '📄 查看完整诊断报告';
+            document.getElementById('diagPlaceholder').textContent = '生成失败：' + (e && e.message ? e.message : e);
+        });
+    }
+
+    function renderDiag(rep) {
+        if (!rep) { return; }
+        document.getElementById('diagPlaceholder').style.display = 'none';
+        document.getElementById('diagReportWrap').style.display = 'block';
+
+        var act = rep.actionable || {};
+        var dr = (rep.section_map && rep.section_map.dark_risk || {}).content || {};
+        var cal = (rep.credibility || {}).calibration || { status: '未校准' };
+        var riskLv = dr.risk_level || 0;
+        var riskColor = riskLv <= 1 ? '#6bc5a8' : (riskLv <= 3 ? '#f0a040' : '#ff6b6b');
+
+        var chips = (act.core_labels || []).map(function (t) {
+            return '<span style="display:inline-block;padding:2px 10px;border-radius:12px;background:#e879a822;color:#e879a8;border:1px solid #e879a855;margin-right:6px;font-size:12px;">' + esc(t) + '</span>';
+        }).join('');
+
+        var summary =
+            '<div style="font-weight:700;margin-bottom:6px;">核心结论</div>' +
+            '<div style="margin-bottom:8px;">' + chips +
+            '<span style="display:inline-block;padding:2px 10px;border-radius:12px;border:1px solid ' + riskColor + ';color:' + riskColor + ';margin-left:6px;font-size:12px;">风险 ' + riskLv + '/5</span>' +
+            '<span style="display:inline-block;padding:2px 10px;border-radius:12px;border:1px solid #888;color:#aaa;margin-left:6px;font-size:12px;">T 校准：' + esc(cal.status) + '</span></div>' +
+            '<div style="color:#eee;line-height:1.8;margin:8px 0;">' + esc(rep.portrait_plain) + '</div>' +
+            '<div style="font-size:13px;color:#6bc5a8;">吃哪套：' + esc((act.what_works || []).join('；')) + '</div>' +
+            '<div style="font-size:13px;color:#ff8a8a;">忌什么：' + esc((act.what_to_avoid || []).join('；')) + '</div>' +
+            '<div style="font-size:13px;color:#8ab4f8;">下一步：' + esc((act.next_moves || []).join('；')) + '</div>';
+        document.getElementById('diagSummary').innerHTML = summary;
+
+        // 导航
+        var nav = (rep.sections || []).map(function (s) {
+            return '<a href="#diagSec' + s.id + '" style="font-size:11px;padding:2px 8px;border-radius:10px;border:1px solid #333;color:#aaa;text-decoration:none;">' + s.id + '.' + esc(s.title) + '</a>';
+        }).join('');
+        document.getElementById('diagNav').innerHTML = nav;
+
+        // 折叠分区
+        var html = (rep.sections || []).map(function (s) {
+            var st = s.status === 'insufficient' ? '<span style="color:#f0a040;font-size:11px;">（待补数据）</span>' : '';
+            return '<details id="diagSec' + s.id + '" style="border:1px solid #232735;border-radius:8px;margin:6px 0;padding:8px;">' +
+                '<summary style="cursor:pointer;color:#e879a8;font-weight:600;">' + s.id + '. ' + esc(s.title) + ' ' + st + '</summary>' +
+                '<div style="margin-top:8px;">' + renderValue(s.content) + '</div></details>';
+        }).join('');
+        document.getElementById('diagSections').innerHTML = html;
+    }
+
+    document.addEventListener('DOMContentLoaded', function () {
+        var btn = document.getElementById('viewDiagReportBtn');
+        if (btn) { btn.addEventListener('click', loadDiag); }
+
+        // ---- 功能开关组：纯前端 CSS 响应 ----
+        var tAnim = document.getElementById('toggleAnimBackground');
+        if (tAnim) {
+            var applyAnim = function () {
+                if (tAnim.checked) { document.body.classList.remove('no-anim'); }
+                else { document.body.classList.add('no-anim'); }
+            };
+            tAnim.addEventListener('change', applyAnim);
+            applyAnim();
+        }
+        var tOp = document.getElementById('toggleOverlayOpacity');
+        if (tOp) {
+            var applyOp = function () {
+                document.documentElement.style.setProperty('--overlay-opacity', tOp.value);
+            };
+            tOp.addEventListener('input', applyOp);
+            applyOp();
+        }
+    });
+})();
+</script>
+</body>
+</html>

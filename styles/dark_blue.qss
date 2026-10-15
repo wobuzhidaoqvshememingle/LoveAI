@@ -1,0 +1,13 @@
+/* LoveAI v3.0 暗夜蓝 dark_blue.qss */
+QWidget { color: #e6f0ff; background-color: #050b1a; font-family: "Microsoft YaHei"; font-size: 14px; }
+QMainWindow, QDialog { background: qlineargradient(x1:0,y1:0,x2:1,y2:1, stop:0 #050b1a, stop:1 #0a1f3c); }
+QFrame#panel, QGroupBox { background: rgba(10,40,80,0.6); border:1px solid rgba(59,130,246,0.3); border-radius:12px; }
+QListWidget::item { padding:10px 14px; border-radius:8px; color:#8ab4ff; }
+QListWidget::item:selected { background: linear-gradient(90deg,#1e40af,#3b82f6); color:#fff; }
+QPushButton { background: linear-gradient(90deg,#1e40af,#3b82f6); color:#fff; border:none; border-radius:20px; padding:8px 18px; font-weight:bold; }
+QPushButton:hover { background: linear-gradient(90deg,#3b82f6,#60a5fa); }
+QLineEdit, QTextEdit, QComboBox { background:rgba(10,40,80,0.7); border:1px solid rgba(59,130,246,0.35); border-radius:8px; padding:6px; color:#e6f0ff; }
+QProgressBar { border:none; border-radius:8px; background:rgba(10,40,80,0.7); height:10px; }
+QProgressBar::chunk { background: linear-gradient(90deg,#1e40af,#3b82f6); border-radius:8px; }
+QScrollBar:vertical { width:8px; background:transparent; }
+QScrollBar::handle:vertical { background:rgba(59,130,246,0.5); border-radius:4px; }

@@ -1,0 +1,26 @@
+{
+  "state": {
+    "isLive2D": true,
+    "isImage": false,
+    "viewCtor": "ke",
+    "modelConfig": "haru | ../assets/models/haru/Haru.model3.json",
+    "natW": 2400,
+    "natH": 4500,
+    "scale": 0.12266666666666666,
+    "viewW": 294.4,
+    "viewH": 552,
+    "hasInternalModel": true,
+    "pixiLive2dLoaded": true
+  },
+  "logs": [
+    "[state] {\"isLive2D\":true,\"isImage\":false,\"viewCtor\":\"ke\",\"modelConfig\":\"haru | ../assets/models/haru/Haru.model3.json\",\"natW\":2400,\"natH\":4500,\"scale\":0.12266666666666666,\"viewW\":294.4,\"viewH\":552,\"hasInternalModel\":true,\"pixiLive2dLoaded\":true}",
+    "[params@idle] {\"t\":1791638010483,\"breathY\":85.85280000000468,\"ParamMouthOpenY\":0,\"ParamEyeLOpen\":1,\"ParamEyeROpen\":1,\"ParamAngleX\":-2.978423595428467,\"ParamAngleY\":-9.886723518371582,\"ParamBodyAngleX\":-0.11168775707483292}",
+    "[params@+1.2s] {\"t\":1791638011700,\"breathY\":88.3168000000049,\"ParamMouthOpenY\":0,\"ParamEyeLOpen\":1,\"ParamEyeROpen\":1,\"ParamAngleX\":0.347326397895813,\"ParamAngleY\":3.8205904960632324,\"ParamBodyAngleX\":-0.8769979476928711}",
+    "[params@mouth=0.9] {\"t\":1791638011871,\"breathY\":88.63360000000493,\"ParamMouthOpenY\":0,\"ParamEyeLOpen\":1,\"ParamEyeROpen\":1,\"ParamAngleX\":0.09320109337568283,\"ParamAngleY\":1.025212049484253,\"ParamBodyAngleX\":-0.11868946999311447}",
+    "[params@mouth=0] {\"t\":1791638012030,\"breathY\":88.98560000000496,\"ParamMouthOpenY\":0,\"ParamEyeLOpen\":1,\"ParamEyeROpen\":1,\"ParamAngleX\":0,\"ParamAngleY\":0,\"ParamBodyAngleX\":0}",
+    "[params@look(0.8,0.5)] {\"t\":1791638012296,\"breathY\":89.54880000000502,\"ParamMouthOpenY\":0,\"ParamEyeLOpen\":1,\"ParamEyeROpen\":1,\"ParamAngleX\":0,\"ParamAngleY\":0,\"ParamBodyAngleX\":0}",
+    "[params@look(-0.8,-0.5)] {\"t\":1791638012558,\"breathY\":90.07680000000506,\"ParamMouthOpenY\":0,\"ParamEyeLOpen\":1,\"ParamEyeROpen\":1,\"ParamAngleX\":0,\"ParamAngleY\":0,\"ParamBodyAngleX\":0}",
+    "[expr] switched happy/surprised/sad/sleeping/idle OK",
+    "[shot] saved live2d_shot_haru.png bytes=86933"
+  ]
+}

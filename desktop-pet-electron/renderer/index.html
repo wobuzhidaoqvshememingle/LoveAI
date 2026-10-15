@@ -1,0 +1,80 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta http-equiv="Content-Security-Policy"
+        content="default-src 'self' 'unsafe-inline' 'unsafe-eval' data: ws: wss: http://localhost:* http://127.0.0.1:*; script-src 'self' 'unsafe-inline' 'unsafe-eval';">
+  <title>LoveAI 桌宠</title>
+  <link rel="stylesheet" href="css/style.css" />
+</head>
+<body class="corner-mode">
+  <!-- 沉浸式全屏暗色背景 -->
+  <div id="immersive-bg"></div>
+
+  <!-- 沉浸式：右侧真人立绘（序列帧动画） -->
+  <div id="immersive-portrait" class="immersive-portrait hidden">
+    <img id="portrait-img" src="../assets/models/cybergf/character.png" alt="girl" />
+  </div>
+
+  <!-- 角色渲染画布（角落模式用，沉浸式隐藏） -->
+  <div id="stage"></div>
+
+  <!-- 实时数字人（local 模式接管画面时显示，默认隐藏） -->
+  <canvas id="dh-canvas" class="dh-canvas hidden"></canvas>
+
+  <!-- 数字人状态角标（右上小角标） -->
+  <div id="dh-badge" class="dh-badge"></div>
+
+  <!-- 关系阶段标签 -->
+  <div id="relationship-tag" class="relationship-tag hidden"></div>
+
+  <!-- 对话气泡（角落模式用） -->
+  <div id="bubble" class="bubble hidden">
+    <div class="bubble-text"></div>
+    <div class="bubble-tail"></div>
+  </div>
+
+  <!-- 沉浸式：左上角状态文字 -->
+  <div id="immersive-status" class="immersive-status hidden">正在聆听...</div>
+
+  <!-- 沉浸式：语音球（中间偏左，蓝色发光） -->
+  <div id="voice-ball" class="voice-ball hidden">
+    <div class="voice-ball-side side-left">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none"><path d="M12 14c1.66 0 3-1.34 3-3V5c0-1.66-1.34-3-3-3S9 3.34 9 5v6c0 1.66 1.34 3 3 3z" fill="rgba(255,255,255,0.7)"/><path d="M17 11c0 2.76-2.24 5-5 5s-5-2.24-5-5H5c0 3.53 2.61 6.43 6 6.92V21h2v-3.08c3.39-.49 6-3.39 6-6.92h-2z" fill="rgba(255,255,255,0.7)"/></svg>
+    </div>
+    <div class="voice-ball-main">
+      <svg width="36" height="36" viewBox="0 0 24 24" fill="none">
+        <path d="M3 9v6h4l5 5V4L7 9H3z" fill="rgba(255,255,255,0.9)"/>
+        <path d="M16.5 12c0-1.77-1.02-3.29-2.5-4.03v8.05c1.48-.73 2.5-2.25 2.5-4.02z" fill="rgba(255,255,255,0.9)"/>
+      </svg>
+    </div>
+    <div class="voice-ball-side side-right">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none"><path d="M19 13h-6v6h-2v-6H5v-2h6V5h2v6h6v2z" fill="rgba(255,255,255,0.7)"/></svg>
+    </div>
+  </div>
+
+  <!-- 沉浸式：底部字幕条 -->
+  <div id="subtitle-bar" class="subtitle-bar hidden">
+    <div id="subtitle-text"></div>
+  </div>
+
+  <!-- 沉浸式：退出按钮 -->
+  <div id="exit-immersive" class="exit-immersive hidden">✕ 退出</div>
+
+  <!-- 设置面板挂载点 -->
+  <div id="settings-mount"></div>
+
+  <!--
+    UMD 库文件本地加载（开发和打包路径一致）：
+    - pixi.min.js: PixiJS 7.x（全局 PIXI）
+    - live2d-cubism4.min.js: pixi-live2d-display Cubism 4 版（挂载到 PIXI.live2d）
+    - live2dcubismcore.min.js: Cubism Core 运行时（moc3 模型必需）
+  -->
+  <script src="lib/pixi.min.js"></script>
+  <script src="lib/live2dcubismcore.min.js"></script>
+  <script src="lib/live2d-cubism4.min.js"></script>
+
+  <!-- 主入口（ES Module） -->
+  <script type="module" src="js/app.js"></script>
+</body>
+</html>

@@ -1,0 +1,37 @@
+{
+  "version": 2,
+  "character": "cybergf",
+  "style": "hehuan-xiaoyaonv",
+  "frameW": 1773,
+  "frameH": 2364,
+  "base": "base.png",
+  "frames": {
+    "base": "base.png",
+    "mouth_01": "mouth_01.png",
+    "mouth_02": "mouth_02.png",
+    "mouth_03": "mouth_03.png",
+    "mouth_04": "mouth_04.png",
+    "mouth_05": "mouth_05.png",
+    "eye_half": "eye_half.png",
+    "eye_closed": "eye_closed.png",
+    "breath_up": "breath_up.png",
+    "expr_happy": "expr_happy.png",
+    "expr_surprised": "expr_surprised.png",
+    "expr_thinking": "expr_thinking.png",
+    "expr_sleeping": "expr_sleeping.png",
+    "expr_shy": "expr_shy.png",
+    "expr_angry": "expr_angry.png"
+  },
+  "mouthSequence": ["base", "mouth_01", "mouth_02", "mouth_03", "mouth_04", "mouth_03", "mouth_02", "mouth_05"],
+  "blinkSequence": ["base", "eye_half", "eye_closed", "eye_half", "base"],
+  "expressions": {
+    "idle": "base",
+    "happy": "expr_happy",
+    "surprised": "expr_surprised",
+    "thinking": "expr_thinking",
+    "sleeping": "expr_sleeping",
+    "shy": "expr_shy",
+    "angry": "expr_angry",
+    "sad": "expr_surprised"
+  }
+}

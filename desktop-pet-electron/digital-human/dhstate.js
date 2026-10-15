@@ -1,0 +1,1 @@
+String([window.__dhView && window.__dhView.mode, window.__dhView && window.__dhView.connected, window.__dhView && window.__dhView.active, window.__dhView && window.__dhView.port, document.getElementById('dh-badge').textContent, document.getElementById('dh-canvas').className].join(' | '))

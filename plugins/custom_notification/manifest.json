@@ -1,0 +1,1 @@
+{"name": "custom_notification", "version": "1.0.0", "author": "LoveAI", "description": "分析完成后推送通知", "entry": "plugin.py"}

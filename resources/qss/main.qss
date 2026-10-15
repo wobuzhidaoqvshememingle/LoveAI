@@ -1,0 +1,275 @@
+/* ============================================================
+ * LoveAI-v2 主样式表 —— 借鉴 Cherry Studio 中性深色主题
+ * 设计参考：Cherry Studio dark palette (shadcn/neutral)
+ *   主背景 #1f1f22 / 侧栏 #26262b / 卡片 #17171a
+ *   前景 #e5e5e8 / 次 #a1a1aa / 弱 #71717a
+ *   描边 rgba(255,255,255,0.08) / 强调 indigo #6366f1
+ * 编码: UTF-8
+ * ============================================================ */
+
+/* ---------- 全局 ---------- */
+QWidget {
+    background-color: #1f1f22;
+    color: #e5e5e8;
+    font-family: "Microsoft YaHei", "Segoe UI";
+    font-size: 10pt;
+}
+
+QMainWindow, QDialog {
+    background-color: #1f1f22;
+}
+
+/* ---------- 按钮（ghost / secondary 风格，非渐变金） ---------- */
+QPushButton {
+    background-color: rgba(255, 255, 255, 0.06);
+    border: 1px solid rgba(255, 255, 255, 0.10);
+    color: #e5e5e8;
+    border-radius: 8px;
+    padding: 6px 16px;
+}
+
+QPushButton:hover {
+    background-color: rgba(255, 255, 255, 0.10);
+    border: 1px solid rgba(255, 255, 255, 0.16);
+    color: #ffffff;
+}
+
+QPushButton:pressed {
+    background-color: rgba(255, 255, 255, 0.04);
+}
+
+QPushButton:disabled {
+    color: #555560;
+    border: 1px solid rgba(255, 255, 255, 0.06);
+    background-color: rgba(255, 255, 255, 0.03);
+}
+
+/* ---------- 标签 ---------- */
+QLabel {
+    color: #e5e5e8;
+    background: transparent;
+}
+
+/* ---------- 输入框 / 文本框 ---------- */
+QLineEdit, QTextEdit, QPlainTextEdit, QSpinBox, QComboBox {
+    background-color: rgba(255, 255, 255, 0.04);
+    border: 1px solid rgba(255, 255, 255, 0.10);
+    color: #e5e5e8;
+    border-radius: 8px;
+    padding: 6px 8px;
+    selection-background-color: #6366f1;
+}
+
+QLineEdit:focus, QTextEdit:focus, QPlainTextEdit:focus, QComboBox:focus {
+    border: 1px solid #6366f1;
+    background-color: rgba(255, 255, 255, 0.06);
+}
+
+/* ---------- 下拉框 ---------- */
+QComboBox QAbstractItemView {
+    background-color: #26262b;
+    color: #e5e5e8;
+    selection-background-color: #6366f1;
+    selection-color: #ffffff;
+    border: 1px solid rgba(255, 255, 255, 0.10);
+    border-radius: 6px;
+    outline: none;
+    padding: 4px;
+}
+
+/* ---------- 分组框 ---------- */
+QGroupBox {
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    border-radius: 10px;
+    margin-top: 14px;
+    padding-top: 10px;
+    color: #a1a1aa;
+    font-weight: normal;
+    background-color: rgba(255, 255, 255, 0.02);
+}
+
+QGroupBox::title {
+    subcontrol-origin: margin;
+    subcontrol-position: top left;
+    left: 12px;
+    padding: 0 6px;
+    color: #a1a1aa;
+}
+
+/* ---------- 列表 / 树（侧边栏会话列表样式） ---------- */
+QListWidget, QTreeWidget {
+    background-color: transparent;
+    border: none;
+    border-radius: 8px;
+    padding: 4px;
+    outline: none;
+}
+
+QListWidget::item, QTreeWidget::item {
+    padding: 8px 12px;
+    border-radius: 8px;
+    color: #c8c8cf;
+}
+
+QListWidget::item:hover, QTreeWidget::item:hover {
+    background-color: rgba(255, 255, 255, 0.06);
+}
+
+QListWidget::item:selected, QTreeWidget::item:selected {
+    background-color: rgba(99, 102, 241, 0.25);
+    color: #ffffff;
+}
+
+/* ---------- 滚动条（纤细、半透明） ---------- */
+QScrollBar:vertical {
+    width: 8px;
+    background: transparent;
+    margin: 4px 2px;
+}
+
+QScrollBar::handle:vertical {
+    background: rgba(255, 255, 255, 0.14);
+    border-radius: 4px;
+    min-height: 30px;
+}
+
+QScrollBar::handle:vertical:hover {
+    background: rgba(255, 255, 255, 0.24);
+}
+
+QScrollBar:horizontal {
+    height: 8px;
+    background: transparent;
+    margin: 2px 4px;
+}
+
+QScrollBar::handle:horizontal {
+    background: rgba(255, 255, 255, 0.14);
+    border-radius: 4px;
+    min-width: 30px;
+}
+
+QScrollBar::add-line, QScrollBar::sub-line {
+    width: 0;
+    height: 0;
+}
+
+QScrollBar::add-page, QScrollBar::sub-page {
+    background: transparent;
+}
+
+/* ---------- 选项卡 ---------- */
+QTabWidget::pane {
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    border-radius: 10px;
+    background-color: #1f1f22;
+}
+
+QTabBar::tab {
+    background-color: transparent;
+    color: #a1a1aa;
+    padding: 8px 16px;
+    border: none;
+    border-radius: 8px;
+    margin-right: 4px;
+}
+
+QTabBar::tab:selected {
+    background-color: rgba(99, 102, 241, 0.22);
+    color: #ffffff;
+}
+
+QTabBar::tab:hover:!selected {
+    background-color: rgba(255, 255, 255, 0.06);
+    color: #e5e5e8;
+}
+
+/* ---------- 表格 ---------- */
+QTableWidget, QTableView {
+    background-color: transparent;
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    border-radius: 8px;
+    gridline-color: rgba(255, 255, 255, 0.06);
+    selection-background-color: rgba(99, 102, 241, 0.25);
+}
+
+QHeaderView::section {
+    background-color: rgba(255, 255, 255, 0.04);
+    color: #a1a1aa;
+    border: none;
+    border-right: 1px solid rgba(255, 255, 255, 0.06);
+    padding: 6px;
+    font-weight: normal;
+}
+
+/* ---------- 进度条 ---------- */
+QProgressBar {
+    background-color: rgba(255, 255, 255, 0.06);
+    border: none;
+    border-radius: 4px;
+    text-align: center;
+    color: #a1a1aa;
+    height: 8px;
+}
+
+QProgressBar::chunk {
+    background-color: #6366f1;
+    border-radius: 4px;
+}
+
+/* ---------- 菜单 ---------- */
+QMenu {
+    background-color: #26262b;
+    border: 1px solid rgba(255, 255, 255, 0.10);
+    border-radius: 8px;
+    color: #e5e5e8;
+    padding: 6px;
+}
+
+QMenu::item {
+    padding: 6px 24px;
+    border-radius: 6px;
+}
+
+QMenu::item:selected {
+    background-color: rgba(99, 102, 241, 0.30);
+    color: #ffffff;
+}
+
+QMenu::separator {
+    height: 1px;
+    background: rgba(255, 255, 255, 0.08);
+    margin: 4px 8px;
+}
+
+/* ---------- 工具提示 ---------- */
+QToolTip {
+    background-color: #26262b;
+    color: #e5e5e8;
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    border-radius: 6px;
+    padding: 6px 10px;
+}
+
+/* ---------- 复选框 ---------- */
+QCheckBox {
+    color: #c8c8cf;
+    spacing: 6px;
+    background: transparent;
+}
+
+QCheckBox::indicator {
+    width: 14px;
+    height: 14px;
+    border-radius: 4px;
+    border: 1px solid rgba(255, 255, 255, 0.25);
+    background: rgba(255, 255, 255, 0.06);
+}
+
+QCheckBox::indicator:checked {
+    background: #6366f1;
+    border: 1px solid #6366f1;
+}
+
+/* ---------- 消息气泡（consult history 里 HTML 引用的基础色） ---------- */
+/* Qt QTextEdit 富文本不支持 border-radius，这里用纯色块模拟气泡 */
