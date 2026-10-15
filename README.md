@@ -11,8 +11,8 @@
 [![License: AGPL-3.0](https://img.shields.io/badge/License-AGPL--3.0-blue.svg)](LICENSE)
 [![Python](https://img.shields.io/badge/Python-3.11%2B-3776AB?logo=python&logoColor=white)](requirements.txt)
 [![Platform](https://img.shields.io/badge/Platform-Windows%20x64-0078D6?logo=windows&logoColor=white)](#)
-[![CI](https://github.com/LoveAI-team/LoveAI/actions/workflows/ci.yml/badge.svg)](https://github.com/LoveAI-team/LoveAI/actions/workflows/ci.yml)
-[![Release](https://img.shields.io/github/v/release/LoveAI-team/LoveAI?include_prereleases)](https://github.com/LoveAI-team/LoveAI/releases)
+[![CI](https://github.com/wobuzhidaoqvshememingle/LoveAI/actions/workflows/ci.yml/badge.svg)](https://github.com/wobuzhidaoqvshememingle/LoveAI/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/wobuzhidaoqvshememingle/LoveAI?include_prereleases)](https://github.com/wobuzhidaoqvshememingle/LoveAI/releases)
 [![PRs Welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg)](CONTRIBUTING.md)
 
 **[中文](README.md) · [English](README_en.md)**
@@ -312,7 +312,7 @@ flowchart LR
 
 ## Star History
 
-<a href="https://star-history.com/#LoveAI-team/LoveAI&Timeline"><img src="https://api.star-history.com/svg?repos=LoveAI-team/LoveAI&type=Timeline" alt="Star History"></a>
+<a href="https://star-history.com/#wobuzhidaoqvshememingle/LoveAI&Timeline"><img src="https://api.star-history.com/svg?repos=wobuzhidaoqvshememingle/LoveAI&type=Timeline" alt="Star History"></a>
 
 ### 致谢
 

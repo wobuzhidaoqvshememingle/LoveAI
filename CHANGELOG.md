@@ -1,7 +1,7 @@
 # LoveAI 更新日志
 
 > 本项目版本号遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/) 与语义化版本（SemVer）。
-> 每个版本对应一个 Git tag / GitHub Release（坐标：`LoveAI-team/LoveAI`），最新版本见本文件顶部。
+> 每个版本对应一个 Git tag / GitHub Release（坐标：`wobuzhidaoqvshememingle/LoveAI`），最新版本见本文件顶部。
 > 历史条目保持原样，不回溯改写；发布前的格式整理仅做最小必要修订。
 >
 > **⚠️ 版本编号勘误（2026-10-12 补记）**：本文曾把**需求批次号** R3.1 / R3.2 / R3.3 误当成软件版本号，写成 [3.1.0] / [3.2.0] / [3.3.0]（三条均为 2026-10-08）。

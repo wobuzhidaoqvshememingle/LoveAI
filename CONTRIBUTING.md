@@ -139,7 +139,7 @@ LoveAI-v2/
    # 网关改动时，在 gateway/ 目录单独跑网关测试
    Push-Location gateway; ..\.venv\Scripts\python.exe -m pytest; Pop-Location
    ```
-4. 推送分支，向 `LoveAI-team/LoveAI` 的主干发起 **Pull Request**。
+4. 推送分支，向 `wobuzhidaoqvshememingle/LoveAI` 的主干发起 **Pull Request**。
 5. PR 描述建议包含：改了什么、为什么改、怎么测的（贴测试结果）、是否需要用户可见的配置 / 数据迁移。
 6. 至少一名维护者 **Code Review** 通过、CI 绿了之后才能合并。
 
