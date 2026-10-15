@@ -159,3 +159,4 @@ desktop-pet-electron/pet_run_err.txt
 # e2e 产物
 docs/e2e_logs/
 /_*.png
+/_*.md
