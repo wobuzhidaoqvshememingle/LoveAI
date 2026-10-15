@@ -160,3 +160,8 @@ desktop-pet-electron/pet_run_err.txt
 docs/e2e_logs/
 /_*.png
 /_*.md
+/_tidy_doc.py
+/_tidy_commit.py
+/_probe.py
+/_probe_out.txt
+/_probe_run.txt
