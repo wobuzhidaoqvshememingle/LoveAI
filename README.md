@@ -81,20 +81,41 @@ LoveAI 是一个 **Windows 桌面端、本地优先（local-first）、隐私可
 
 ## 快速开始
 
-### 前置要求
+### 方式一：下载安装包（Windows，免配置）
+
+到 [**Releases → v3.1.0**](https://github.com/wobuzhidaoqvshememingle/LoveAI/releases/tag/v3.1.0) 下载。
+
+> 安装包 3.14 GB，超过 GitHub 单文件 2 GiB 上限，已拆成 **4 个分卷**。
+
+1. 把 `LoveAI_Setup_v3.1.0.7z.001` ~ `.004` **四个分卷全部**下到**同一个文件夹**（缺一个都解压不了）
+2. 用 [7-Zip](https://www.7-zip.org/) 右键点 **`.001`** → 解压到当前文件夹
+3. 得到 `LoveAI_Setup_v3.1.0.exe`，双击安装
+
+**完整性校验**（解压后在 PowerShell 里跑）：
+
+```powershell
+Get-FileHash .\LoveAI_Setup_v3.1.0.exe -Algorithm SHA256
+# 应为 D25D74419A08788D171127F7C7E62A883CE37F2B59105094B8DB8AF4ED5C0717
+```
+
+---
+
+### 方式二：从源码构建（开发者，推荐）
+
+#### 前置要求
 
 - Windows 10 / 11（x64）；
 - Python **3.11 或 3.12**（安装时勾选 *Add to PATH*）；
 - Node.js 18+（**仅** Electron 桌宠需要，实测 Node v22 / npm 10）；
 - Git。
 
-### 一键安装（推荐，Windows）
+#### 一键安装（推荐，Windows）
 
 1. 克隆后双击 **`install.bat`**：创建 `.venv` → 安装主程序 `requirements.txt` → 安装 `gateway/requirements.txt` → 在 `desktop-pet-electron` 执行 `npm install`。幂等，可重复运行。
 2. 双击 **`start.bat`**：先在 `:8787` 启动网关，再启动主程序（主程序会经 `pet_launcher` 自动拉起桌宠）。
 3. 首次打开在设置 / 引导里配置一个可用模型（云端 API Key，或走网关仪表盘，或启用本地模型）。
 
-### 手动命令（跨平台 / 开发者，PowerShell 语法）
+#### 手动命令（跨平台 / 开发者，PowerShell 语法）
 
 ```powershell
 # 在仓库根目录 $ROOT 下

@@ -76,20 +76,41 @@ Each feature is backed by a real module; the bracketed names point to the corres
 
 ## Quick start
 
-### Prerequisites
+### Option 1: Download the installer (Windows, zero setup)
+
+Get it from [**Releases → v3.1.0**](https://github.com/wobuzhidaoqvshememingle/LoveAI/releases/tag/v3.1.0).
+
+> The installer is 3.14 GB, above GitHub's 2 GiB per-file limit, so it ships as **4 split volumes**.
+
+1. Download `LoveAI_Setup_v3.1.0.7z.001` through `.004` **all into the same folder** (extraction fails if any part is missing)
+2. Right-click **`.001`** and extract with [7-Zip](https://www.7-zip.org/)
+3. Run the resulting `LoveAI_Setup_v3.1.0.exe`
+
+**Verify integrity** (after extraction, in PowerShell):
+
+```powershell
+Get-FileHash .\LoveAI_Setup_v3.1.0.exe -Algorithm SHA256
+# Expected: D25D74419A08788D171127F7C7E62A883CE37F2B59105094B8DB8AF4ED5C0717
+```
+
+---
+
+### Option 2: Build from source (developers, recommended)
+
+#### Prerequisites
 
 - Windows 10 / 11 (x64);
 - Python **3.11 or 3.12** (tick *Add to PATH* during install);
 - Node.js 18+ (**only** needed for the Electron pet; tested on Node v22 / npm 10);
 - Git.
 
-### One-click install (recommended, Windows)
+#### One-click install (recommended, Windows)
 
 1. After cloning, double-click **`install.bat`**: creates `.venv` → installs the main program's `requirements.txt` → installs `gateway/requirements.txt` → runs `npm install` in `desktop-pet-electron`. Idempotent and safe to re-run.
 2. Double-click **`start.bat`**: starts the gateway on `:8787` first, then launches the main program (which auto-spawns the pet via `pet_launcher`).
 3. On first run, configure a working model in settings / onboarding (a cloud API Key, or via the gateway dashboard, or enable a local model).
 
-### Manual commands (cross-platform / developers, PowerShell syntax)
+#### Manual commands (cross-platform / developers, PowerShell syntax)
 
 ```powershell
 # From the repository root $ROOT
