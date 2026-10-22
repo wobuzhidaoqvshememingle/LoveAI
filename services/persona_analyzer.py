@@ -696,15 +696,34 @@ class PersonaAnalyzer:
         except Exception as e:  # noqa: BLE001
             logger.warning("用户修正叠加失败（不影响主画像）: %s", e)
 
-        # R3.3-45 六层人格画像：把 17 维输出重挂到 L1~L6，挂进 profile["six_layer"]。
-        # 之前六层模块写好了但主程序从不调（孤岛）。这里 return 前真接一次。
+        # R3.3-45 / v3.2.0 六层人格画像：走测写凭证链（Chain-of-Credentials Gate）。
+        # 旧版直接 to_six_layer().summary() + logger.debug 吞错，已废弃。
+        # 链断 → ERROR 日志 + 把 break 信息挂进 six_layer（UI 可见），不再静默 None。
         try:
-            from services import six_layer_persona as _slp
-            profile["six_layer"] = _slp.to_six_layer(
-                profile, person_id=person_id).summary()
-        except Exception as e:  # noqa: BLE001
-            logger.debug("六层人格画像挂接失败（不影响主画像）: %s", e)
-            profile["six_layer"] = None
+            from services.profiling_chain import run_profiling_chain
+            chain_msgs = [
+                {"content": m.get("content", ""), "direction": m.get("direction", "")}
+                for m in messages
+            ]
+            chain_res = run_profiling_chain(person_id, chain_msgs,
+                                            persona_result=profile)
+            if chain_res.get("ok"):
+                profile["six_layer"] = chain_res.get("summary")
+                profile["six_layer_unmet"] = chain_res.get("unmet_layers", [])
+            else:
+                logger.error(
+                    "六层测写凭证链断裂 @ %s: %s（person=%s）",
+                    chain_res.get("broken_at"), chain_res.get("reason"), person_id)
+                profile["six_layer"] = {
+                    "chain_broken": True,
+                    "broken_at": chain_res.get("broken_at"),
+                    "reason": chain_res.get("reason"),
+                }
+                profile["six_layer_unmet"] = chain_res.get("unmet_layers", [])
+        except Exception as e:  # 链路径异常：ERROR 上抛，不再 logger.debug 吞
+            logger.error("六层测写凭证链未预期异常（person=%s）: %s", person_id, e)
+            profile["six_layer"] = {"chain_error": True, "error": str(e)}
+            profile["six_layer_unmet"] = []
 
         # === 人格障碍倾向维度恢复输出（分级·证据驱动·不武断确诊）===
         try:
@@ -2185,7 +2204,18 @@ class PersonaAnalyzer:
         other_initiate = 0
         last_date = None
         for m in messages:
-            msg_date = m.get("created_at", "")[:10] if m.get("created_at") else ""
+            # 兼容 created_at 为 int/float 时间戳（旧库/外部喂数）与 ISO 字符串两种形态；
+            # None/缺字段给空串，不炸。int 时 fromtimestamp 转 ISO 再切日期。
+            ca = m.get("created_at")
+            if ca is None or ca == "":
+                msg_date = ""
+            elif isinstance(ca, (int, float)):
+                try:
+                    msg_date = datetime.fromtimestamp(ca).isoformat()[:10]
+                except Exception:
+                    msg_date = ""
+            else:
+                msg_date = str(ca)[:10]
             if msg_date != last_date:
                 if m["direction"] == "sent":
                     my_initiate += 1
@@ -4442,6 +4472,10 @@ class PersonaAnalyzer:
             dict: {"type", "label", "description", "score_breakdown"}
         """
         attachment = persona_result.get("attachment", {}) or {}
+        # 向后兼容：旧画像 attachment 可能是裸字符串（如 "secure"/"回避型"），
+        # 直接当 dict 取 .get 会 AttributeError。字符串包成 {"type": s}。
+        if isinstance(attachment, str):
+            attachment = {"type": attachment}
         values = persona_result.get("values_match", {}) or {}
         emotion = persona_result.get("emotion_pattern", {}) or {}
         investment_balance = persona_result.get("investment_balance", {}) or {}
@@ -4588,53 +4622,28 @@ PERSONA_LAYERS = {
 
 
 def build_persona_6layer(person_id: str, chat_messages: list = None) -> dict:
-    """6层人格结构；某层提取失败跳过该层，向后兼容。"""
-    msgs = chat_messages or []
-    out = {"person_id": person_id, "layers": {}}
-    try:
-        texts = " ".join(str(m.get("text", "")) for m in msgs[:200])
-        out["layers"][0] = {"rules": [x for x in ["从不主动道歉", "生气就冷战"] if x in texts] or ["(待观察)"]}
-        out["layers"][1] = {"identity": "(24维画像见 analyze_persona)", "notes": texts[:50]}
-        out["layers"][2] = {"catchphrases": [w for w in ["哈哈","哦","嗯"] if w in texts]}
+    """v3.2.0 起废弃（Bug#1：死代码，另一套 0-5 层 scheme 与 Layer 枚举不一致）。
 
-        # ---- R3.3-45: 不再写原占位串；用聊天文本真算 ----
-        # L3 爱的语言: 命中服务性行动/肯定言辞/礼物/身体接触/精心时刻关键词
-        ll_hits = []
-        if re.search(r"(谢谢你|辛苦|帮|照顾|记得|买了|送给|陪你|来看)", texts):
-            ll_hits.append("服务性行动/精心时刻")
-        if re.search(r"(我爱你|想你|乖|宝贝|心疼|夸奖|棒|厉害)", texts):
-            ll_hits.append("肯定言辞")
-        out["layers"][3] = {
-            "love_language": "/".join(ll_hits) if ll_hits else "未在样本中识别到明确表达",
-            "evidence_chars": len(texts),
-        }
-        # L4 冲突模式: 命中冷战/翻旧账/摔门/道歉路径
-        cp_hits = []
-        if re.search(r"(冷战|不回|已读不回|哼|随便你)", texts):
-            cp_hits.append("回避/冷处理")
-        if re.search(r"(又|上次|以前|每次|翻旧账)", texts):
-            cp_hits.append("翻旧账")
-        if re.search(r"(对不起|抱歉|我错了|和好)", texts):
-            cp_hits.append("主动道歉修复")
-        out["layers"][4] = {
-            "conflict_pattern": "/".join(cp_hits) if cp_hits else "样本不足，暂未观察到稳定冲突模式",
-            "evidence_chars": len(texts),
-        }
-        # L5 触发因素: 命中讨厌/消失信号/回归/开心触发
-        tr_hits = []
-        if re.search(r"(烦|讨厌|恶心|滚|别提|不想听)", texts):
-            tr_hits.append("负面触发: 被否定/被贬低")
-        if re.search(r"(忙|累|睡了|改天)", texts):
-            tr_hits.append("退缩信号: 以忙碌/疲惫为由回避")
-        if re.search(r"(哈哈|开心|好耶|安排|周末)", texts):
-            tr_hits.append("正向触发: 轻松邀约与玩笑")
-        out["layers"][5] = {
-            "triggers": "/".join(tr_hits) if tr_hits else "样本不足，暂未识别到稳定触发词",
-            "evidence_chars": len(texts),
-        }
-    except Exception:
-        pass
-    return out
+    统一走 services.profiling_chain.run_profiling_chain。这里保留一个 shim
+    以防老调用方还在 import，内部直接委托给凭证链。
+    """
+    import warnings
+    from services.profiling_chain import run_profiling_chain
+    warnings.warn(
+        "build_persona_6layer() 已废弃，请改用 run_profiling_chain()",
+        DeprecationWarning, stacklevel=2)
+    chain_msgs = []
+    for m in (chat_messages or [])[:200]:
+        if isinstance(m, dict):
+            chain_msgs.append({"content": m.get("text") or m.get("content") or "",
+                               "direction": m.get("direction", "")})
+    res = run_profiling_chain(person_id, chain_msgs)
+    return {
+        "person_id": person_id,
+        "layers": res.get("summary", {}).get("per_layer", {}),
+        "unmet_layers": res.get("unmet_layers", []),
+        "deprecated": True,
+    }
 
 
 # =====================================================================

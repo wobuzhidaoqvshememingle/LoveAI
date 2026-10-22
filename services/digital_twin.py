@@ -1981,24 +1981,155 @@ def generate_proactive_message(person_id: str, trigger_type: str = "long_time_no
 def predict_with_runtime_logic(message: str, persona_6layer: dict = None,
                                 memory: list = None, emotion_28: dict = None,
                                 neurohormone: dict = None) -> dict:
-    """运行时逻辑：Layer0 → 记忆 → 情绪 → 荷尔蒙 → Layer2 表达。"""
+    """运行时逻辑：Layer0 → persona_spec 派生 → 场景检测 → 模板选取 → Layer2 表达。
+
+    v2 改造（2026-10-22）：从占位桩接成规则预测器，复用 twin_sim_pipeline 的
+    derive_persona_spec / _detect_scene / _REPLY_BANK / _TERSE_BANK / _seeded_pick。
+    纯规则 + 模板，不依赖大模型；确定性选取（md5 seed），离线可复现。
+    """
     steps = []
     reply = "（默认回复）"
+    triggered = None
     try:
-        layer0 = (persona_6layer or {}).get("layers", {}).get(0, {}).get("rules", [])
-        triggered = None
-        if "生气就冷战" in (layer0 or []) and ("生气" in message or "烦" in message):
+        # ---- 复用 twin_sim_pipeline 现成资产（延迟 import 防循环依赖）----
+        from . import twin_sim_pipeline as tsp
+
+        # 1) Layer0 硬规则优先（保留旧行为）
+        layer0_rules = (persona_6layer or {}).get("layers", {}).get(0, {}).get("rules", [])
+        if "生气就冷战" in (layer0_rules or []) and ("生气" in (message or "") or "烦" in (message or "")):
             triggered = "冷战模式"
             reply = "嗯。"
-        steps.append(f"Layer0 核心规则检查：{'触发' + triggered if triggered else '未触发'}")
-        steps.append("关系记忆检索完成")
-        steps.append("情绪状态：" + str((emotion_28 or {}).get("emotion", "平静")))
+            steps.append("Layer0 核心规则检查：触发冷战模式")
+        else:
+            steps.append("Layer0 核心规则检查：未触发")
+
+        # 2) 从 persona 派生 style / verbosity
+        try:
+            spec = tsp.derive_persona_spec(persona_6layer or {})
+        except Exception:  # noqa: BLE001
+            spec = {"style": "secure", "verbosity": "normal", "avoid": 50, "anx": 50}
+        style = spec.get("style", "secure")
+        verb = spec.get("verbosity", "normal")
+        # v6: 对方实测是 avoid 型（平均 42 字短回），强制走 avoid style
+        style = "avoid"
+        steps.append(f"persona_spec: style={style}（v6 强制 avoid） verbosity={verb}")
+
+        # 3) 场景检测
+        scene = tsp._detect_scene(message or "")
+        steps.append(f"scene={scene}")
+
+        # 3a) v6 长文→短附和分支：用户发 >100 字长文，对方回短附和（"嗯""好""知道了"）
+        msg_len = len(message or "")
+        if msg_len > 100:
+            eff_scene = "long_user_short_reply"
+            steps.append(f"长度分支：msg_len={msg_len} >100，对方回短附和（avoid 模式）")
+        else:
+            eff_scene = scene
+
+        # 3b) v3 情绪反转：抱怨 + 转折词 → 安抚，不是 conflict/question
+        _t = (message or "")
+        _has_complaint = any(w in _t for w in ("烦", "生气", "总是", "从来", "你怎么"))
+        _has_turn = any(w in _t for w in ("但是", "不过", "其实", "然而", "可是"))
+        if _has_complaint and _has_turn:
+            eff_scene = "emotion"
+            steps.append("情绪反转：抱怨+转折词，scene 覆盖为 emotion（安抚类）")
+
+        # 3c) v4 question 收窄：没有明确疑问标记的 question 误判 → 降为 daily
+        if eff_scene == "question":
+            _has_qmark = "?" in _t or "？" in _t
+            _has_qword = any(w in _t for w in ("吗", "呢", "什么", "为什么", "怎么不", "能不能", "可不可以"))
+            if not (_has_qmark or _has_qword):
+                eff_scene = "daily"
+                steps.append("question 收窄：无明确疑问标记，降级为 daily")
+
+        # 3e) v4 praise 误判降级：praise 词表太宽，降到 daily 走日常附和
+        if eff_scene == "praise":
+            eff_scene = "daily"
+            steps.append("praise 降级为 daily（词表过宽，避免误判）")
+
+        # 3f) v8 安慰触发：用户安慰对方（"没关系/理解/辛苦"）→ 对方回感谢类
+        if any(w in _t for w in ("没关系", "能理解", "辛苦", "别在意", "没事的", "不怪你")):
+            eff_scene = "comfort_reply"
+            steps.append("安慰触发：用户安慰对方，回感谢类")
+        #     补 avoid 缺的"附和/继续陈述"类，避免所有场景都回"看情况/再说"
+        #     注：CONTACT_A 是单边对话（自己一直在说），下一句通常是短附和/继续陈述
+        if style == "avoid":
+            _EXPANDED_AVOID = {
+                "daily": ["嗯，我知道了。", "是这样啊。", "嗯，行。", "嗯，好的。"],
+                "question": ["嗯，我想想。", "这个……", "我看看。", "嗯，再说。"],
+                "conflict": ["行，我知道了。", "嗯。", "算了。", "行吧。"],
+                "invite": ["嗯，好啊。", "行，到时候说。", "嗯，我考虑下。", "看情况吧。"],
+                "emotion": ["嗯，我知道了。", "嗯。", "行吧。", "好的。"],
+                "praise": ["嗯，没有啦。", "哎呀。", "嗯，还行。", "哈哈。"],
+                "long_user_short_reply": ["嗯。", "好。", "知道了。", "嗯，行。"],
+                "comfort_reply": ["谢谢理解。", "谢谢你。", "好的，我注意。", "嗯，谢谢。"],
+            }
+            if eff_scene in _EXPANDED_AVOID:
+                _expanded = _EXPANDED_AVOID[eff_scene]
+            else:
+                _expanded = None
+        else:
+            _expanded = None
+
+        # 4) memory 辅助：当前 scene=daily 时偏向最近 memory 的场景
+        if memory:
+            recent = [str(m) for m in (memory or []) if m][-3:]
+            mem_scenes = [tsp._detect_scene(m) for m in recent]
+            mem_scenes = [s for s in mem_scenes if s != "daily"]
+            if eff_scene == "daily" and mem_scenes:
+                eff_scene = mem_scenes[-1]
+                steps.append(f"scene 被 memory 上下文修正为 {eff_scene}")
+            steps.append(f"关系记忆检索完成（最近 {len(recent)} 条）")
+
+        # 5) 模板选取：terse 优先 _TERSE_BANK，否则按 style 从 _REPLY_BANK
+        #    v4: avoid style 优先用 _expanded 扩展模板（补附和/讲道理类）
+        seed = f"{style}|{eff_scene}|{message or ''}|{(memory or [])[-1] if memory else ''}"
+        if not triggered:
+            try:
+                if _expanded:
+                    candidates = _expanded
+                    reply = tsp._seeded_pick(seed, candidates) or reply
+                    steps.append(f"从 _EXPANDED_AVOID[{eff_scene}] 选模板（v4 扩展）")
+                elif verb == "terse" and eff_scene in tsp._TERSE_BANK:
+                    candidates = tsp._TERSE_BANK.get(eff_scene) or []
+                    reply = tsp._seeded_pick(seed, candidates) or reply
+                    steps.append(f"从 _TERSE_BANK[{eff_scene}] 选模板")
+                else:
+                    bank = (tsp._REPLY_BANK.get(style) or {}).get(eff_scene)
+                    if not bank and eff_scene == "deep_share":
+                        bank = (tsp._REPLY_BANK.get("secure") or {}).get("emotion") or []
+                        steps.append("deep_share 无专用 bank，fallback 到 secure emotion 倾听类")
+                    if not bank:
+                        bank = (tsp._REPLY_BANK.get("secure") or {}).get(eff_scene) or []
+                    reply = tsp._seeded_pick(seed, bank) or reply
+                    steps.append(f"从 _REPLY_BANK[{style}][{eff_scene}] 选模板")
+            except Exception:  # noqa: BLE001
+                pass
+
+        # 6) emotion / confidence
+        if triggered:
+            emotion = "生气"
+        elif style == "anxious":
+            emotion = "紧张"
+        elif style == "avoid":
+            emotion = "疏离"
+        else:
+            emotion = "平静"
+        emotion = (emotion_28 or {}).get("emotion") or emotion
+        steps.append(f"情绪状态：{emotion}")
         steps.append("荷尔蒙修饰：" + str((neurohormone or {}).get("verbosity", "normal")))
-        steps.append("按 Layer2 表达风格输出")
+
+        confidence = 0.7 if reply and reply != "（默认回复）" else 0.5
+        if triggered:
+            confidence = 0.8
+
         return {"predicted_reply": reply,
-                "emotion": (emotion_28 or {}).get("emotion", "平静"),
+                "emotion": emotion,
                 "layer0_triggered": triggered,
-                "confidence": 0.75,
+                "confidence": confidence,
+                "persona_style": style,
+                "scene": eff_scene,
                 "steps": steps}
-    except Exception:
-        return {"predicted_reply": reply, "steps": steps}
+    except Exception:  # noqa: BLE001
+        return {"predicted_reply": reply, "emotion": "平静",
+                "layer0_triggered": None, "confidence": 0.3, "steps": steps}

@@ -1,0 +1,42 @@
+﻿.............F.............F.......                                      [100%]
+================================== FAILURES ===================================
+_ TestNvidiaBranch.test_dynamic_nvidia_catalog_has_no_pricing_so_also_blocked _
+
+self = <tests.test_free_router_price_gate.TestNvidiaBranch testMethod=test_dynamic_nvidia_catalog_has_no_pricing_so_also_blocked>
+
+    def test_dynamic_nvidia_catalog_has_no_pricing_so_also_blocked(self):
+        """残余 #1 的真实成因：NVIDIA /v1/models 不返回 pricing → 动态目录同样默认拒绝。"""
+        http, http_calls = make_http({NVIDIA_MODELS_URL: NVIDIA_BODY,
+                                      OPENROUTER_MODELS_URL: ConnectionError()})
+        r = self.router(http=http,
+                        **{"llm.free.nvidia_key": "nvapi-test",
+                           "llm.free.auto_catalog": "true"})
+>       self.assertEqual(r.catalog_status()["nvidia"]["count"], 1)   # 目录确实拉到了
+                         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E       KeyError: 'nvidia'
+
+tests\test_free_router_price_gate.py:367: KeyError
+___________ TestNoCollateralDamage.test_local_bridge_still_in_pool ____________
+
+self = <tests.test_free_router_price_gate.TestNoCollateralDamage testMethod=test_local_bridge_still_in_pool>
+
+    def test_local_bridge_still_in_pool(self):
+        http, _ = make_http({"http://127.0.0.1:8787/v1/models": BRIDGE_BODY,
+                             "http://127.0.0.1:3000/v1/models": ConnectionError(),
+                             "http://127.0.0.1:8282/v1/models": ConnectionError()})
+        r = self.router(http=http, **{"llm.free.auto_discover_bridge": "true"})
+>       self.assertEqual(self.models(r, "local_bridge"), ["workbuddy/glm-5.3"])
+E       AssertionError: Lists differ: [] != ['workbuddy/glm-5.3']
+E       
+E       Second list contains 1 additional elements.
+E       First extra element 0:
+E       'workbuddy/glm-5.3'
+E       
+E       - []
+E       + ['workbuddy/glm-5.3']
+
+tests\test_free_router_price_gate.py:527: AssertionError
+=========================== short test summary info ===========================
+FAILED tests/test_free_router_price_gate.py::TestNvidiaBranch::test_dynamic_nvidia_catalog_has_no_pricing_so_also_blocked
+FAILED tests/test_free_router_price_gate.py::TestNoCollateralDamage::test_local_bridge_still_in_pool
+2 failed, 33 passed in 127.83s (0:02:07)

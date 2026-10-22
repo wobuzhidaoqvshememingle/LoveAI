@@ -232,7 +232,7 @@ class WeChatDBReader:
             "content": pick("StrContent", "content", "message_content", "strcontent", "msg"),
             "type": pick("Type", "message_type", "local_type", "msg_type"),
             "sub_type": pick("SubType", "sub_type", "messagesubtype"),
-            "is_sender": pick("IsSender", "is_sender", "issend", "isSend"),
+            "is_sender": pick("IsSender", "is_sender", "issend", "isSend", "real_sender_id"),
         }
 
     # ------------------------------------------------------------------
@@ -266,11 +266,31 @@ class WeChatDBReader:
         is_sender = g("is_sender") or 0
         if isinstance(is_sender, str):
             is_sender = 1 if is_sender in ("1", "true", "True") else 0
+        # 4.x 实测：real_sender_id=2 是用户自己（全库 62142 条，远多于其他 ID），
+        # 其他值是对方/系统。旧逻辑把 real_sender_id 原值当 is_sender 用，
+        # 导致 100 万条全标成 is_sender=0（对方发的）。
+        try:
+            is_sender = int(is_sender)
+        except Exception:  # noqa: BLE001
+            is_sender = 0
+        if is_sender not in (0, 1):
+            # 是 real_sender_id 原值（2/365/1831 等），映射：2=用户自己，其他=对方
+            is_sender = 1 if is_sender == 2 else 0
+        # 4.x 实测 19.7% 的 StrContent 列在 sqlite 里是 BLOB(bytes) 而非 TEXT(str)，
+        # 下游 " ".join(...) 会直接 TypeError。统一在 reader 出口 decode 成 str，
+        # 调用方不再需要各自做 bytes->utf-8 适配。
+        _raw_content = g("content")
+        if isinstance(_raw_content, bytes):
+            try:
+                _raw_content = _raw_content.decode("utf-8", errors="replace")
+            except Exception:  # noqa: BLE001
+                _raw_content = ""
+        _content = _raw_content or ""
         return {
             "msg_id": g("msg_id"),
             "create_time": int(ts),
             "talker_id": talker,
-            "content": (g("content") or ""),
+            "content": _content,
             "msg_type": int(msg_type),
             "sub_type": int(sub_type),
             "is_sender": int(is_sender),

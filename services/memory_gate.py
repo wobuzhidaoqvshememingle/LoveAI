@@ -104,10 +104,12 @@ class RejectedItem:
 _PUNCT_RE = re.compile(r"[\s，。！？、,.!?~～…—\-_「」『』《》()（）\[\]【】\"'`]+")
 
 
-def _normalize_text(text: str) -> str:
-    """去标点/空白，用于相似度与主题签名。"""
+def _normalize_text(text: Any) -> str:
+    """去标点/空白，用于相似度与主题签名。非 str 输入容错转 str（不崩）。"""
     if not text:
         return ""
+    if not isinstance(text, str):
+        text = str(text)
     return _PUNCT_RE.sub("", text)
 
 
@@ -187,7 +189,14 @@ def gate_calibration_item(raw: dict[str, Any]) -> Optional[dict[str, Any]]:
     if not isinstance(raw, dict):
         return None
 
-    text = (raw.get("text") or "").strip()
+    raw_text = raw.get("text")
+    if raw_text is None:
+        text = ""
+    elif isinstance(raw_text, str):
+        text = raw_text.strip()
+    else:
+        # 非 str（int/list/dict）容错：转成字符串再判，绝不因字段类型不规范崩溃
+        text = str(raw_text).strip()
     source = (raw.get("source") or "unknown").strip()
     confidence = raw.get("confidence")
     try:
@@ -339,8 +348,10 @@ class MemoryGate:
 
     # ------------------------------------------------------------------ #
     @staticmethod
-    def _classify_reject_reason(raw: dict[str, Any]) -> str:
-        """单条被拒时，给出机器可读的原因标签。"""
+    def _classify_reject_reason(raw: Any) -> str:
+        """单条被拒时，给出机器可读的原因标签。非 dict 输入归为 invalid_item。"""
+        if not isinstance(raw, dict):
+            return "invalid_item"
         text = (raw.get("text") or "").strip()
         try:
             conf_val = float(raw.get("confidence")) if raw.get("confidence") is not None else 1.0
@@ -365,12 +376,13 @@ class MemoryGate:
             now = datetime.now().isoformat(timespec="seconds")
             with open(self.rejected_log_path, "a", encoding="utf-8") as f:
                 for r in rejected:
-                    text = (r.raw.get("text") or "")[:80]
+                    raw = r.raw if isinstance(r.raw, dict) else {}
+                    text = (raw.get("text") or "")[:80]
                     f.write(
                         f"[{now}] reason={r.reason} "
-                        f"speaker={r.raw.get('speaker')} "
-                        f"source={r.raw.get('source')} "
-                        f"conf={r.raw.get('confidence')} "
+                        f"speaker={raw.get('speaker')} "
+                        f"source={raw.get('source')} "
+                        f"conf={raw.get('confidence')} "
                         f"text={text!r}\n"
                     )
         except Exception as e:  # noqa: BLE001

@@ -32,6 +32,16 @@ MEDIUM = "medium"
 HARD = "hard"
 _TIERS = (EASY, MEDIUM, HARD)
 
+# P0 卡2：四色任务分级（与 model_routing_matrix 对齐）
+# 懒导入避免顶层循环依赖；model_routing_matrix 本身不 import difficulty_router，
+# 但保持懒导入更安全，未来即便反向依赖也不会炸。
+def _import_task_color():
+    try:
+        from services.model_routing_matrix import TaskColor
+        return TaskColor
+    except Exception:  # noqa: BLE001 - 模块缺失时降级为 None，绝不外抛
+        return None
+
 _DEFAULT_EASY_KW = (
     "你好", "您好", "嗨", "哈喽", "在吗", "在不在", "早上好", "晚上好",
     "晚安", "睡了", "谢谢", "感谢", "再见", "拜拜", "hi", "hello",
@@ -131,3 +141,29 @@ class DifficultyRouter:
                     "matched_easy": [], "reason": f"规则异常回落:{e}"}
         detail["via_classifier"] = bool(callable(self.classifier))
         return detail
+
+    # ------------------------------------------------------------------ #
+    # P0 卡2：难度分级 -> 四色任务（GREEN/YELLOW/RED/BLACK）
+    # ------------------------------------------------------------------ #
+    # 映射表（写死）：easy -> GREEN；medium -> YELLOW；hard -> RED。
+    # BLACK（关键决策/高风险）不由难度分级自动产生，由调用方显式标注
+    # （例如：分手决策、金钱往来、是否报警等场景），避免误把普通 hard 当 BLACK。
+    _TIER_TO_COLOR = {
+        EASY: "GREEN",
+        MEDIUM: "YELLOW",
+        HARD: "RED",
+    }
+
+    def color_for(self, tier: str) -> str:
+        """把 easy/medium/hard 映射为四色字符串。
+
+        返回 "GREEN" / "YELLOW" / "RED" / "BLACK"（字符串，避免强制依赖
+        model_routing_matrix.TaskColor 的 import；上层可自行转枚举）。
+
+        未识别 tier 默认回落到 "YELLOW"（中等风险，偏保守）。
+        """
+        return self._TIER_TO_COLOR.get(tier, "YELLOW")
+
+    def color_of(self, text: str) -> str:
+        """便捷入口：classify(text) -> color 字符串。"""
+        return self.color_for(self.classify(text))

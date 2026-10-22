@@ -176,5 +176,76 @@ class TestFaultRouterHandle(unittest.TestCase):
         self.assertIn("disk", alerts[0]["error"].lower())
 
 
+class TestClassifyFaultEdge(unittest.TestCase):
+    """分类门禁边界：4xx 其他 / 网络异常变体 / 上下文超长 / 配置键缺失 / 脏 ctx。"""
+
+    class _StatusErr(Exception):
+        def __init__(self, code, body=""):
+            super().__init__(f"HTTP {code}: {body}")
+            self.status_code = code
+
+    def test_other_4xx_defaults_to_p0_safe_retry(self):
+        """400/408/413 不在 P1 列表里 → 按 P0 安全侧先自愈一次再上抛。"""
+        for code in (400, 408, 410, 413, 451):
+            self.assertIs(classify_fault(self._StatusErr(code)),
+                          FaultLevel.P0_IMMEDIATE_RECOVER, f"status={code}")
+
+    def test_connection_aborted_and_refused_are_p0(self):
+        self.assertIs(classify_fault(ConnectionAbortedError("aborted")),
+                      FaultLevel.P0_IMMEDIATE_RECOVER)
+        self.assertIs(classify_fault(ConnectionRefusedError("refused")),
+                      FaultLevel.P0_IMMEDIATE_RECOVER)
+
+    def test_context_length_exceeded_is_p1(self):
+        """上下文超长 = 模型侧问题，应切层不是重试。
+
+        代码里的关键词表："context window exceeded" / "context_length"。
+        """
+        for body in ("context window exceeded",
+                     "This model's context_length_exceeded"):
+            err = self._StatusErr(400, body)
+            self.assertIs(classify_fault(err),
+                          FaultLevel.P1_DEGRADE_SWITCH, body)
+
+    def test_required_config_key_keyerror_is_p2(self):
+        err = KeyError("llm.cloud.api_key")
+        lvl = classify_fault(err, ctx={"required_config_keys": ["llm.cloud.api_key"]})
+        self.assertIs(lvl, FaultLevel.P2_MANUAL)
+
+    def test_keyerror_not_in_required_list_falls_through(self):
+        err = KeyError("some_unrelated_key")
+        lvl = classify_fault(err, ctx={"required_config_keys": ["llm.cloud.api_key"]})
+        self.assertIs(lvl, FaultLevel.P0_IMMEDIATE_RECOVER)
+
+    def test_unknown_generic_exception_defaults_p0(self):
+        self.assertIs(classify_fault(RuntimeError("weird thing happened")),
+                      FaultLevel.P0_IMMEDIATE_RECOVER)
+
+    def test_garbage_streak_string_does_not_crash(self):
+        """脏 ctx：consecutive_p1_failures='abc' 不崩，按 0 处理。"""
+        err = self._StatusErr(429)
+        lvl = classify_fault(err, ctx={"consecutive_p1_failures": "abc"})
+        self.assertIs(lvl, FaultLevel.P1_DEGRADE_SWITCH)
+
+    def test_garbage_threshold_string_does_not_crash(self):
+        """脏 ctx：p2_threshold='xyz' 不崩，按默认阈值处理。"""
+        err = self._StatusErr(429)
+        lvl = classify_fault(err, ctx={"p2_threshold": "xyz",
+                                       "consecutive_p1_failures": 3})
+        self.assertIs(lvl, FaultLevel.P2_MANUAL)
+
+    def test_notifier_raising_itself_is_swallowed(self):
+        """notifier 回调本身抛错 → 不能炸掉 P2 流程，仍返回 manual_required。"""
+        def boom(_report):
+            raise RuntimeError("notifier crashed")
+
+        fr = FaultRouter(notifier=boom)
+        outcome, result = fr.handle(
+            FaultLevel.P2_MANUAL,
+            lambda: (_ for _ in ()).throw(OSError(errno.ENOSPC, "disk full")))
+        self.assertEqual(outcome, "manual_required")
+        self.assertIsNone(result)
+
+
 if __name__ == "__main__":
     unittest.main()

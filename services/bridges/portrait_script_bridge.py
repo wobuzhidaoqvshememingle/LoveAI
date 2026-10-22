@@ -80,10 +80,25 @@ class PortraitScriptBridge(Bridge):
             logger.warning("画像证据写入失败: %s", e)
 
         # 闭环节点：发一次成熟度事件（带当前待补层）
+        # v3.2.0 Bug#5 修复：出口门禁——跑完自动读 pending_layers，
+        # 有未达标层就显式 ERROR 日志报告"哪层没达标、缺什么证据"，不再静默 publish 放行。
         try:
             pending = self.portrait.pending_layers()
-        except Exception:
+        except Exception as e:
             pending = []
+            logger.error("读取 pending_layers 失败（出口门禁异常）: %s", e)
+        if pending:
+            # 显式对账：逐层列证据数
+            detail = []
+            for layer_name in pending:
+                try:
+                    evs = self.portrait.evidence.get(layer_name, [])
+                    detail.append(f"{layer_name}(当前{len(evs)}条,缺{3 - len(evs)}条)")
+                except Exception:
+                    detail.append(f"{layer_name}(证据读取失败)")
+            logger.error(
+                "[出口门禁] 人物 %s 测写未达标层: %s（缺证据，需补跑或显式报告）",
+                pid, "; ".join(detail))
         self.bus.publish(ev.PORTRAIT_MATURED, {
             "person_id": pid, "pending_layers": pending,
             "maturity": round(1.0 - len(pending) / 6.0, 3)})

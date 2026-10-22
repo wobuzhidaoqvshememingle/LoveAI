@@ -96,8 +96,23 @@ def classify_fault(error: BaseException,
             ctx.get("required_config_keys") or []):
         return FaultLevel.P2_MANUAL
     # 连续 N 次 P1 失败 → 升级人工介入
-    streak = int(ctx.get("consecutive_p1_failures", 0) or 0)
-    threshold = int(ctx.get("p2_threshold", DEFAULT_P2_THRESHOLD) or DEFAULT_P2_THRESHOLD)
+    # 容错：ctx 传入非数字字符串（脏配置/脏调用）时不崩溃，按默认 0 / 阈值处理
+    streak_raw = ctx.get("consecutive_p1_failures", 0)
+    if not streak_raw:
+        streak = 0
+    else:
+        try:
+            streak = int(streak_raw)
+        except (TypeError, ValueError):
+            streak = 0
+    thr_raw = ctx.get("p2_threshold", DEFAULT_P2_THRESHOLD)
+    if not thr_raw:
+        threshold = DEFAULT_P2_THRESHOLD
+    else:
+        try:
+            threshold = int(thr_raw)
+        except (TypeError, ValueError):
+            threshold = DEFAULT_P2_THRESHOLD
     if streak >= threshold:
         return FaultLevel.P2_MANUAL
 

@@ -1,0 +1,17 @@
+﻿============================= test session starts =============================
+platform win32 -- Python 3.14.7, pytest-9.1.1, pluggy-1.6.0 -- <工程根>\.venv\Scripts\python.exe
+rootdir: <工程根>
+configfile: pytest.ini
+plugins: anyio-4.15.1, asyncio-1.4.0, timeout-2.5.0
+asyncio: mode=Mode.STRICT, debug=False, asyncio_default_fixture_loop_scope=None, asyncio_default_test_loop_scope=function
+collecting ... collected 47 items / 40 deselected / 7 selected
+
+tests/test_free_router_price_gate.py::TestUnknownProviderEntryWarns::test_colon_bearing_bare_id_stays_silent PASSED [ 14%]
+tests/test_free_router_price_gate.py::TestUnknownProviderEntryWarns::test_known_entries_unaffected_by_unknown_neighbours PASSED [ 28%]
+tests/test_free_router_price_gate.py::TestUnknownProviderEntryWarns::test_provider_ids_all_known_to_the_whitelist_parser PASSED [ 42%]
+tests/test_free_router_price_gate.py::TestUnknownProviderEntryWarns::test_regression_four_writing_styles_unchanged PASSED [ 57%]
+tests/test_free_router_price_gate.py::TestUnknownProviderEntryWarns::test_same_entry_warns_only_once PASSED [ 71%]
+tests/test_free_router_price_gate.py::TestUnknownProviderEntryWarns::test_unknown_provider_exact_form_also_warns PASSED [ 85%]
+tests/test_free_router_price_gate.py::TestUnknownProviderEntryWarns::test_unknown_provider_wildcard_degrades_to_bare_id_and_warns PASSED [100%]
+
+====================== 7 passed, 40 deselected in 2.62s =======================

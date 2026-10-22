@@ -1,0 +1,26 @@
+﻿.......................F................                                 [100%]
+================================== FAILURES ===================================
+_ TestConfigurableLocalEndpointLeak.test_bridge_probe_url_pointed_at_a_paid_endpoint_is_blocked _
+
+self = <tests.test_free_router_price_gate.TestConfigurableLocalEndpointLeak testMethod=test_bridge_probe_url_pointed_at_a_paid_endpoint_is_blocked>
+
+    def test_bridge_probe_url_pointed_at_a_paid_endpoint_is_blocked(self):
+        remote_body = json.dumps({"data": [{"id": "gpt-4o"}]})
+        http, http_calls = make_http({"https://api.paid.example/v1/models": remote_body,
+                                      OPENROUTER_MODELS_URL: ConnectionError()})
+        r = self.router(http=http, **{
+            "llm.free.auto_catalog": "true",
+            "llm.free.bridge_probe_urls": "https://api.paid.example/v1"})
+        self.assertEqual(r.candidates(), [])
+        with self.assertRaises(RuntimeError):
+            r.chat("你是助手", "你好")
+        self.assertEqual(FakeOpenAI.calls, [])
+        self.assertEqual(FakeOpenAI.built, [])
+>       self.assertIn("https://api.paid.example/v1/models", http_calls)  # 只探了目录
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E       AssertionError: 'https://api.paid.example/v1/models' not found in ['https://openrouter.ai/api/v1/models', 'https://openrouter.ai/api/v1/models']
+
+tests\test_free_router_price_gate.py:521: AssertionError
+=========================== short test summary info ===========================
+FAILED tests/test_free_router_price_gate.py::TestConfigurableLocalEndpointLeak::test_bridge_probe_url_pointed_at_a_paid_endpoint_is_blocked
+1 failed, 39 passed in 55.59s

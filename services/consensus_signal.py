@@ -377,3 +377,11 @@ def run_consensus_signal(db_path: str, person_id: str,
     result["person_id"] = person_id
     result["db_path"] = db_path
     return result
+
+
+# --------------------------------------------------------------------------- #
+# P0 卡11：Reed-Solomon K=3+M=1 多模型竞速共识（薄导出）
+# RS 逻辑独立放在 services/rs_consensus.py，不在本模块硬塞；此处仅做命名空间导出。
+# rs_consensus.py 不 import 本模块，无循环 import 风险。
+# --------------------------------------------------------------------------- #
+from services.rs_consensus import RSConsensusK3M1  # noqa: E402,F401

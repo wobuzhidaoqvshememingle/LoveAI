@@ -175,15 +175,30 @@ def run(chat_snapshot: dict) -> dict:
         else:
             fallbacks.append("persona")
 
-    # 1.5 六层画像
+    # 1.5 六层画像（v3.2.0：走测写凭证链，不再各自直接 to_six_layer().summary()）
     six_layer: dict[str, Any] = {}
     try:
-        sl_mod = _safe_import("services.six_layer_persona")
-        if sl_mod is not None:
-            slp = sl_mod.to_six_layer(persona, person_id=person_id)
-            six_layer = slp.summary()
-    except Exception as e:
-        logger.warning("six_layer_persona 失败: %s", e)
+        from services.profiling_chain import run_profiling_chain
+        chain_msgs = [
+            {"content": str(c.get("text") or c.get("content") or ""),
+             "direction": "sent" if c.get("role") == "me" else "received"}
+            for c in recent_chats if isinstance(c, dict)
+        ]
+        chain_res = run_profiling_chain(person_id, chain_msgs,
+                                       persona_result=persona or None)
+        if chain_res.get("ok"):
+            six_layer = chain_res.get("summary") or {}
+            six_layer["unmet_layers"] = chain_res.get("unmet_layers", [])
+        else:
+            logger.error("六层测写链断裂 @ %s: %s",
+                         chain_res.get("broken_at"), chain_res.get("reason"))
+            six_layer = {"chain_broken": True,
+                         "broken_at": chain_res.get("broken_at"),
+                         "reason": chain_res.get("reason")}
+            fallbacks.append("six_layer_chain_broken")
+    except Exception as e:  # 链路径异常 ERROR 上抛，不再静默 warning 吞
+        logger.error("六层测写链未预期异常: %s", e)
+        six_layer = {"chain_error": True, "error": str(e)}
         fallbacks.append("six_layer")
 
     # 1.6 NPD/黑暗三联征加权（C12 修复）：

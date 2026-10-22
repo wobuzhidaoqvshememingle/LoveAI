@@ -1,0 +1,102 @@
+﻿[harness] openai.OpenAI 已打桩为假客户端
+[harness] socket.connect / connect_ex 已禁用（全程离线）
+==============================================================================
+① 付费候选打不出去：拒绝时出站调用次数 = 0
+==============================================================================
+
+[①a] llm.free.nvidia_models 里塞付费模型 openai/gpt-4o（NVIDIA 分支）
+[WARNING] services.free_model_router: 免费通道 nvidia:openai/gpt-4o 已拒绝（fail-closed 价格门 default_deny，默认拒绝）：没有拿到任何免费证据（公开目录未覆盖 / 目录拉取失败 / 该端点不公开价目表）；如确认其确为免费，请把 id 加入白名单配置项 llm.free.trusted_models 后重试（写法：provider:id / provider:* / 裸 id）
+  candidates         : []
+  ranked             : []
+  [调用前] http_get 调用   : []
+  [调用前] openai 客户端构造: []
+  [调用前] chat.completions: []
+  chat() 结果         : RuntimeError(免费模型池为空（fail-closed：不路由到付费模型）：已配置的免费渠道全部不可用（未配置 / 探活失败 / 冷却中 / 限流触顶）)
+  [调用后] openai 客户端构造: []
+  [调用后] chat.completions: []
+
+[①b] llm.free.custom_base + custom_models 塞付费模型（custom 分支）
+[WARNING] services.free_model_router: 免费通道 custom:gpt-4o 已拒绝（fail-closed 价格门 default_deny，默认拒绝）：没有拿到任何免费证据（公开目录未覆盖 / 目录拉取失败 / 该端点不公开价目表）；如确认其确为免费，请把 id 加入白名单配置项 llm.free.trusted_models 后重试（写法：provider:id / provider:* / 裸 id）
+  candidates         : []
+  ranked             : []
+  [调用前] http_get 调用   : []
+  [调用前] openai 客户端构造: []
+  [调用前] chat.completions: []
+  chat() 结果         : RuntimeError(免费模型池为空（fail-closed：不路由到付费模型）：已配置的免费渠道全部不可用（未配置 / 探活失败 / 冷却中 / 限流触顶）)
+  [调用后] openai 客户端构造: []
+  [调用后] chat.completions: []
+
+==============================================================================
+② 白名单正向对照：登记后能被放行，且真的被调用（不是死代码）
+==============================================================================
+
+[②a] 同一份 nvidia 配置 + trusted_models=nvidia:openai/gpt-4o
+  candidates         : ['nvidia:openai/gpt-4o']
+  ranked             : ['nvidia:openai/gpt-4o']
+  [调用前] http_get 调用   : []
+  [调用前] openai 客户端构造: []
+  [调用前] chat.completions: []
+  chat() 结果         : routed_via=nvidia:openai/gpt-4o text='ok'
+  [调用后] openai 客户端构造: ['https://integrate.api.nvidia.com/v1']
+  [调用后] chat.completions: ['openai/gpt-4o']
+  snapshot['mode']    : {"free_only": true, "fail_closed": true, "price_gate": "fail_closed_whitelist", "trusted_models": ["nvidia:openai/gpt-4o"], "trusted_models_count": 1}
+
+[②b] 同一份 custom 配置 + trusted_models=custom:*（端点级）
+  candidates         : ['custom:gpt-4o']
+  ranked             : ['custom:gpt-4o']
+  [调用前] http_get 调用   : []
+  [调用前] openai 客户端构造: []
+  [调用前] chat.completions: []
+  chat() 结果         : routed_via=custom:gpt-4o text='ok'
+  [调用后] openai 客户端构造: ['http://10.0.0.5:9999/v1']
+  [调用后] chat.completions: ['gpt-4o']
+
+==============================================================================
+③ 付费不可翻案：正面证明付费的候选，登记白名单也仍被拒绝
+==============================================================================
+
+[③] 全量目录里 openai/gpt-4o pricing 非 0 + trusted_models=openrouter:*
+[WARNING] services.free_model_router: 免费通道 openrouter:openai/gpt-4o 已拒绝（fail-closed 价格门 proven_paid，默认拒绝）：公开价格目录已证明它收费（pricing 任一项非 0），白名单也不得翻案；如确认其确为免费，请把 id 加入白名单配置项 llm.free.trusted_models 后重试（写法：provider:id / provider:* / 裸 id）
+  candidates         : []
+  ranked             : []
+  [调用前] http_get 调用   : ['https://openrouter.ai/api/v1/models']
+  [调用前] openai 客户端构造: []
+  [调用前] chat.completions: []
+  chat() 结果         : RuntimeError(免费模型池为空（fail-closed：不路由到付费模型）：已配置的免费渠道全部不可用（未配置 / 探活失败 / 冷却中 / 限流触顶）)
+  [调用后] openai 客户端构造: []
+  [调用后] chat.completions: []
+  ↑ 注意：同一条 openrouter:* 白名单对**没有付费证据**的 id 是生效的（见下）
+  [对照] vendor/unlisted-in-catalog 的 candidates: ['vendor/unlisted-in-catalog']
+
+==============================================================================
+④ 不误杀对照：本机 Ollama / pollinations / llm7 / OpenRouter :free 仍进池
+==============================================================================
+
+[④a] 本机 Ollama + 零配置 pollinations/llm7 + OpenRouter 静态 :free
+  candidates         : ['openrouter:meta-llama/llama-3.3-70b-instruct:free', 'openrouter:deepseek/deepseek-chat-v3-0324:free', 'openrouter:qwen/qwen-2.5-72b-instruct:free', 'openrouter:google/gemini-2.0-flash-exp:free', 'openrouter:microsoft/wizardlm-2-8x22b-v1.0:free', 'ollama:loveai-qwen05b:latest', 'pollinations:openai-fast', 'pollinations:openai', 'pollinations:llama', 'pollinations:mistral', 'llm7:DeepSeek-V4-Flash-0731', 'llm7:gpt-4o-mini', 'llm7:claude-3-5-sonnet', 'llm7:llama-3.3-70b']
+  ranked             : ['ollama:loveai-qwen05b:latest', 'openrouter:meta-llama/llama-3.3-70b-instruct:free', 'openrouter:deepseek/deepseek-chat-v3-0324:free', 'openrouter:qwen/qwen-2.5-72b-instruct:free', 'openrouter:google/gemini-2.0-flash-exp:free', 'openrouter:microsoft/wizardlm-2-8x22b-v1.0:free', 'pollinations:openai-fast', 'pollinations:openai', 'pollinations:llama', 'pollinations:mistral', 'llm7:DeepSeek-V4-Flash-0731', 'llm7:gpt-4o-mini', 'llm7:claude-3-5-sonnet', 'llm7:llama-3.3-70b']
+  [调用前] http_get 调用   : ['https://openrouter.ai/api/v1/models', 'https://openrouter.ai/api/v1/models']
+  [调用前] openai 客户端构造: []
+  [调用前] chat.completions: []
+  chat() 结果         : routed_via=ollama:loveai-qwen05b:latest text='ok'
+  [调用后] openai 客户端构造: ['http://localhost:11434/v1']
+  [调用后] chat.completions: ['loveai-qwen05b:latest']
+  (A) 直通源集合      : ['desktop', 'llm7', 'local_bridge', 'local_scan', 'ollama', 'pollinations']
+
+[④b] OpenRouter 动态目录：五维全 0 / :free 进池，正面证明付费的不进池
+  candidates         : ['openrouter:vendor/new-free:free', 'openrouter:vendor/zeroprice']
+  ranked             : ['openrouter:vendor/new-free:free', 'openrouter:vendor/zeroprice']
+  [调用前] http_get 调用   : ['https://openrouter.ai/api/v1/models']
+  [调用前] openai 客户端构造: []
+  [调用前] chat.completions: []
+  chat() 结果         : routed_via=openrouter:vendor/new-free:free text='ok'
+  [调用后] openai 客户端构造: ['https://openrouter.ai/api/v1']
+  [调用后] chat.completions: ['vendor/new-free:free']
+
+==============================================================================
+总结
+==============================================================================
+① NVIDIA / custom 的付费候选：candidates 为空，出站调用 0 次
+② 同一候选登记白名单后：进池并被真实调用
+③ 正面证明付费者：即使 provider:* 白名单也仍被拒绝（出站 0 次）
+④ Ollama / pollinations / llm7 / OpenRouter :free 全部照常进池

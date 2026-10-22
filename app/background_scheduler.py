@@ -65,6 +65,9 @@ class BackgroundUpdater:
         self._lock = threading.Lock()
         self._running = False
         self.last_run_stats: dict = {}
+        # v3.2.0 Bug#3 修复：记录每个 person 上次跑测写链时的消息水位。
+        # 水位（msg_count）没涨 = 没新证据 = 不进链，禁止到点直接空过/重复跑。
+        self._profiling_watermark: dict[str, int] = {}
 
     # ------------------------------------------------------------------ #
     # 状态查询
@@ -274,18 +277,29 @@ class BackgroundUpdater:
             except Exception as e:
                 logger.debug("[bg] memory.extract_from_chat(%s) 失败: %s", person_id, e)
 
-        # ---- 5. 画像刷新（persona.analyze，消息数足够才跑）----
+        # ---- 5. 画像刷新（v3.2.0：按消息水位增量触发，不跑空链）----
+        # Bug#3 修复：旧版 msg_count>=10 就每轮重跑 analyze，无新证据也空过。
+        # 新版：记录上次处理水位，水位涨了才进测写链；异常 ERROR 上抛不吞。
         persona = self.services.get("persona")
         profile = None
         if persona is not None and hasattr(persona, "analyze"):
-            try:
-                msg_count = self._count_messages(person_id)
-                if msg_count >= 10:
+            msg_count = self._count_messages(person_id)
+            last_wm = self._profiling_watermark.get(person_id, 0)
+            if msg_count >= 10 and msg_count > last_wm:
+                try:
                     profile = persona.analyze(person_id)
+                    self._profiling_watermark[person_id] = msg_count
                     out["persona_refreshed"] = True
                     out["persona_msg_count"] = msg_count
-            except Exception as e:
-                logger.debug("[bg] persona.analyze(%s) 失败: %s", person_id, e)
+                    out["persona_watermark_prev"] = last_wm
+                except Exception as e:
+                    # 链路径关键异常：ERROR 日志（不再 logger.debug 吞）
+                    logger.error("[bg] persona.analyze(%s) 测写链失败: %s", person_id, e)
+                    out["persona_refresh_error"] = str(e)
+            elif msg_count >= 10:
+                out["persona_refresh_skipped_no_new_evidence"] = True
+                out["persona_watermark"] = last_wm
+                out["persona_msg_count"] = msg_count
 
         # ---- 5.5 策略适配矩阵重算（因时制宜：画像更新后自动重算策略）----
         # 轻量、不阻塞；检测到策略漂移时写入 out 供上层（scheduler）发信号通知 UI。

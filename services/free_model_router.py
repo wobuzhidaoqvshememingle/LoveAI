@@ -511,8 +511,17 @@ class FreeModelRouter:
                  local_scanner=None,
                  desktop_connector=None,
                  browser_hub=None,
-                 web_search=None) -> None:
+                 web_search=None,
+                 routing_matrix=None,
+                 auto_matrix: bool = True) -> None:
         self.config = config or {}
+        # P0 卡2：可选注入的模型降级路由矩阵（L0-L3 × 绿黄红黑 + NYSE 熔断）。
+        # - 传了 routing_matrix：持有注入实例（测试用 fake / 自定义 clock）；
+        # - 没传但 auto_matrix=True（默认）：懒加载模块级默认实例，自动走
+        #   data/.state/circuit_breaker.json 落盘，生产开箱即用；
+        # - 没传且 auto_matrix=False：纯旧行为，不接矩阵（回归测试用）。
+        self._routing_matrix = routing_matrix
+        self._auto_matrix_enabled = auto_matrix
         # 运行期健康表：key=(provider,model) -> Candidate
         self._health: dict[tuple, Candidate] = {}
         # HTTP / 时钟可注入（离线测试用），默认走标准库 / 真实时间
@@ -1223,7 +1232,7 @@ class FreeModelRouter:
             self._health[k] = Candidate(provider, base_url, key, model)
         return self._health[k]
 
-    def ranked(self) -> list[Candidate]:
+    def ranked(self, task_color=None) -> list[Candidate]:
         """排序：可用候选按「实际排序分 → 成功率降序 → 延迟升序」；未知渠道排在
         已知失败之后、已知成功之前。Ollama 本地默认最优先（零成本、无配额）。
 
@@ -1237,8 +1246,21 @@ class FreeModelRouter:
         原位，所以**不需要手工调各 Provider 顺序**。基础优先级见
         free_router_kernel.PROVIDER_BASE_PRIORITY（可用
         ``llm.free.priority.<provider>`` 覆盖，数字越小越优先）。
+
+        P0 卡2：task_color（可选，TaskColor 或其字符串值）传入时，按
+        ModelRoutingMatrix 的 L0-L3 × 四色表过滤候选：
+          - 不在允许 tier 集合里的 provider 被剔除；
+          - 被矩阵判定为 BLOCKED（24h 拉黑）的 provider 被剔除。
+        传 None（默认）时行为与旧版完全一致。
         """
         cands = [c for c in self.candidates() if self._eligible(c)]
+
+        # P0 卡2：按 task_color 过滤
+        if task_color is not None:
+            matrix = self._get_routing_matrix()
+            if matrix is not None:
+                cands = self._filter_by_task_color(cands, task_color)
+
         alive = [c for c in cands if self._alive.get(c.model) is True]
         unknown = [c for c in cands if self._alive.get(c.model) is not True]
 
@@ -1264,6 +1286,72 @@ class FreeModelRouter:
             return local + remote
 
         return _sort_group(alive) + _sort_group(unknown)
+
+    # ------------------------------------------------------------------ #
+    # P0 卡2：task_color 过滤
+    # ------------------------------------------------------------------ #
+    def _get_routing_matrix(self):
+        """获取 routing matrix：注入的优先；否则懒加载默认实例（auto_matrix=True 时）。"""
+        if self._routing_matrix is not None:
+            return self._routing_matrix
+        if not self._auto_matrix_enabled:
+            return None
+        # 懒加载：避免 import 副作用 + 拖慢启动
+        try:
+            from services.model_routing_matrix import ModelRoutingMatrix
+            self._routing_matrix = ModelRoutingMatrix(clock=self._clock)
+            return self._routing_matrix
+        except Exception as e:  # noqa: BLE001
+            logger.warning("懒加载 routing_matrix 失败: %s", e)
+            self._auto_matrix_enabled = False  # 失败一次就不再试
+            return None
+
+    def _filter_by_task_color(self, cands: list, task_color) -> list:
+        """按 ModelRoutingMatrix 的四色 × L0-L3 表过滤候选。
+
+        - task_color 可能是 TaskColor 枚举或其字符串值（"GREEN"/"YELLOW"/...）；
+        - 不在允许 tier 集合的 provider 被剔除；
+        - 被矩阵判定为 BLOCKED 的 provider 被剔除；
+        - 任何异常都静默回退到「不过滤」，绝不炸主流程。
+        """
+        try:
+            from services.model_routing_matrix import (
+                TaskColor, COLOR_TIER_MAP, TIER_PROVIDERS, ProviderState,
+            )
+            # 归一化 task_color
+            if isinstance(task_color, str):
+                tc = TaskColor(task_color)
+            else:
+                tc = task_color
+            allowed_tiers = set(COLOR_TIER_MAP[tc])
+            # provider -> tier 反查表
+            provider_to_tier = {}
+            for tier, ps in TIER_PROVIDERS.items():
+                for p in ps:
+                    if p is not None:
+                        provider_to_tier[p] = tier
+
+            out = []
+            matrix = self._get_routing_matrix()
+            for c in cands:
+                tier = provider_to_tier.get(c.provider)
+                if tier is None:
+                    # 未知 provider（如自定义渠道）不在矩阵表里，保守放行
+                    out.append(c)
+                    continue
+                if tier not in allowed_tiers:
+                    continue
+                # 查熔断状态：用 matrix 自己的时钟（避免 FreeModelRouter 真实时钟
+                # 与注入 FakeClock 错位导致 BLOCKED 误判为已过期）
+                cb = matrix._breakers.get(c.provider) if matrix is not None else None
+                state = cb.state() if cb is not None else ProviderState.OK
+                if state is ProviderState.BLOCKED:
+                    continue
+                out.append(c)
+            return out
+        except Exception as e:  # noqa: BLE001
+            logger.warning("task_color 过滤异常，回退不过滤: %s", e)
+            return cands
 
     # ------------------------------------------------------------------ #
     # R3.3-30/31/32 韧性：错误分级 / 熔断 / 冷却 / 探活
@@ -1442,6 +1530,13 @@ class FreeModelRouter:
         self._cd.record_success(c.model)
         self._alive[c.model] = True
         self._penalty.on_success(self._channel_key(c))
+        # P0 卡2：同步回写熔断矩阵（懒加载默认实例 / 注入实例均可）
+        matrix = self._get_routing_matrix()
+        if matrix is not None:
+            try:
+                matrix.record(c.provider, success=True)
+            except Exception as e:  # noqa: BLE001
+                logger.warning("routing_matrix.record(success) 失败: %s", e)
 
     def _record_429(self, c: Candidate) -> dict:
         """429 重试用尽仍被限流：惩罚分 +3 并升级 429 冷却（2min/10min/1h/24h）。
@@ -1457,6 +1552,13 @@ class FreeModelRouter:
         """一次 5xx：CooldownTable 记录失败（30s 起步翻倍、封顶 5min）。"""
         self._cd.record_failure(c.model,
                                 f"5xx: {error}" if error else "5xx")
+        # P0 卡2：同步回写熔断矩阵（懒加载默认实例 / 注入实例均可）
+        matrix = self._get_routing_matrix()
+        if matrix is not None:
+            try:
+                matrix.record(c.provider, success=False)
+            except Exception as e:  # noqa: BLE001
+                logger.warning("routing_matrix.record(failure) 失败: %s", e)
 
     def _record_auth_fail(self, c: Candidate) -> None:
         """401/403：永久标记该模型/账号不可用（直到重启），不再重试。"""

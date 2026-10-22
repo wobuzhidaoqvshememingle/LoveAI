@@ -101,16 +101,16 @@ def derive_persona_spec(profile: Optional[dict], own_messages: Optional[List[str
     anx = float(att.get("anxiety_score", 50) or 50)
     psych = (profile.get("psychology", {}) or {}).get("overall_health", "") or ""
     dark = (profile.get("psychology", {}) or {}).get("dark_triad_tendencies", {}) or {}
-    npd_like = ("自恋" in dark) or (avoid >= 60 and anx < 40)
+    npd_like = ("自恋" in dark) or (avoid >= 40 and anx < 40)
 
     if "安全" in atype:
         style = "secure"
-    elif ("回避" in atype) or ("疏离" in atype) or avoid >= 60:
+    elif ("回避" in atype) or ("疏离" in atype) or avoid >= 40:
         style = "avoid"
-    elif "焦虑" in atype or anx >= 60:
+    elif "焦虑" in atype or anx >= 40:
         style = "anxious"
     else:
-        style = "avoid" if (avoid >= 60 and anx < 40) else ("anxious" if anx >= 60 else "secure")
+        style = "avoid" if (avoid >= 40 and anx < 40) else ("anxious" if anx >= 40 else "secure")
 
     comm = profile.get("communication", {}) or {}
     conflict = profile.get("conflict_style", {}) or {}

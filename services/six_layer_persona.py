@@ -321,16 +321,9 @@ def to_six_layer(persona_result: dict,
             "source": "persona_analyzer",
             "quote": f"人格剧本={primary}",
         })
-    # 兜底：某层仍空时，用 summary 顶一条，保证每层都有可读证据
-    summary = _g("summary")
-    if summary:
-        summary = str(summary)[:80]
-        for layer in Layer:
-            if not prof.evidence.get(layer):
-                prof.add_evidence(layer, {
-                    "source": "persona_analyzer",
-                    "quote": f"画像摘要：{summary}",
-                })
+    # v3.2.0 修复 Bug#2：删除旧版"空层用 summary 假兜底"。
+    # 空层就保持空，由 profiling_chain.S2_QUALIFY 显式标 pending，
+    # S3_RECONCILE 补扫或诚实报告"源材料耗尽"。禁止模板句冒充证据。
 
     return prof
 
