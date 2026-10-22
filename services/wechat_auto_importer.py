@@ -216,88 +216,82 @@ class WechatAutoImporter:
     # ------------------------------------------------------------------
     # 内部：新 DB 管线
     # ------------------------------------------------------------------
+    #: 单账号最多收集的消息条数（防止一次把整库灌进内存；截断会写进 log）
+    MAX_DB_MESSAGES_PER_ACCOUNT = 200000
+
     def _run_db_pipeline(self,
                          contact_filter: Optional[List[str]],
                          incremental: bool,
                          enable_high_risk: bool) -> None:
-        from . import wechat_db_reader as reader_mod
-        from . import wechat_key_extractor as ext_mod
+        """多路径 DB 导入管线——统一走 WechatOneClick 调度。
 
-        self._set_step(1, "检测微信进程/版本")
-        proc_info = self._extractor.detect_wechat_process() or ext_mod.detect_wechat_process() or {}
-        if not proc_info.get("pid"):
-            self._log.append({"kind": "step", "ok": False,
-                              "reason": "未检测到运行中的微信进程"})
-            return
+        【本次修复的三个真断点】
+        1. 不再硬编码 `E:\\xwechat_files`，也不再"只取 os.listdir 里第一个 wxid_ 目录"：
+           改为扫描全部候选根 + **全部账号**（多账号不再丢失，换机不再失效）。
+        2. 不再先要求 `detect_wechat_process()` 拿到 pid 才继续：
+           有缓存密钥时本来就能离线导入，进程信息现在只作为版本判定佐证。
+        3. 不再只读 `message_*.db`：交给 WechatOneClick 处理账号下**全部** db
+           （contact / session / media 等能解的都解），逐库成功失败可查。
 
-        version = proc_info.get("version", "4.x")
-        # 推断 db_dir：4.x 用 E:\xwechat_files\wxid_*\  ；3.x 用 WeChat Files\wxid_*\
-        db_dir = None
+        红线：wx_key.dll / frida / chatlog_alpha 等注入类动作在 enable_high_risk 为假时
+        永不触发；`enable_high_risk=True` 也只是放开低风险阶梯里的内存扫描，
+        不会由本方法拉起注入窗口（那必须走 UI 侧的显式确认入口）。
+        """
+        from .wechat_oneclick import WechatOneClick
+
+        self._set_step(1, "发现微信数据库（多根/多账号）")
+        reader_cls = getattr(self._reader, "WeChatDBReader", None)
+        if reader_cls is None:
+            try:
+                from .wechat_db_reader import WeChatDBReader as reader_cls  # noqa: F811
+            except Exception as e:  # noqa: BLE001
+                self._log.append({"kind": "step", "ok": False,
+                                  "reason": f"DB 读取器不可用: {e}"})
+                return
+
+        svc = WechatOneClick(key_extractor=self._extractor, reader_cls=reader_cls)
+
+        self._set_step(2, "取密钥 + 批量解密（缓存优先，微信未运行也可）")
         try:
-            import os
-            if version == "4.x":
-                root = r"E:\xwechat_files"
-                if os.path.isdir(root):
-                    for name in os.listdir(root):
-                        full = os.path.join(root, name)
-                        if name.startswith("wxid_") and os.path.isdir(full):
-                            db_dir = full
-                            break
-            else:
-                root = os.path.expanduser(r"~\Documents\WeChat Files")
-                if os.path.isdir(root):
-                    for name in os.listdir(root):
-                        full = os.path.join(root, name)
-                        if name.startswith("wxid_") and os.path.isdir(full):
-                            db_dir = full
-                            break
-        except Exception:
-            pass
-        if not db_dir:
-            self._log.append({"kind": "step", "ok": False,
-                              "reason": "无法推断微信数据目录"})
+            out = svc.collect_messages(
+                contact_filter=contact_filter,
+                incremental=incremental,
+                consent_high_risk=enable_high_risk,
+                max_messages_per_account=self.MAX_DB_MESSAGES_PER_ACCOUNT,
+            )
+        except Exception as e:  # noqa: BLE001
+            logger.exception("DB 管线执行异常: %s", e)
+            self._log.append({"kind": "step", "ok": False, "reason": str(e)})
             return
 
-        self._set_step(2, "提取数据库密钥")
-        # 选一个代表性 db 作为校验目标
-        if version == "4.x":
-            probe_db = os.path.join(db_dir, "db_storage", "message", "message_0.db")
-        else:
-            probe_db = os.path.join(db_dir, "Msg", "MSG0.db")
-        if not os.path.exists(probe_db):
+        # 把一键总控的逐步留痕搬进本导入器的 log（含每条密钥路线 / 每个库的结果）
+        for line in (out.get("log") or []):
+            self._log.append({"kind": "step", "detail": line})
+        for err in (out.get("errors") or []):
             self._log.append({"kind": "step", "ok": False,
-                              "reason": f"探针库不存在: {probe_db}"})
-            return
+                              "account": err.get("account_id"),
+                              "reason": err.get("reason"),
+                              "next_action": err.get("next_action")})
 
-        key_info = self._extractor.extract_key_auto(
-            db_path=probe_db, version=version,
-            enable_high_risk=enable_high_risk,
-            process_info=proc_info)
-        if not key_info or not key_info.get("ok") or not key_info.get("key"):
-            self._log.append({"kind": "step", "ok": False,
-                              "reason": "密钥提取失败（微信长时间运行后密钥可能已释放，建议重启微信后立即重试）"})
-            return
-        self._log.append({"kind": "step", "ok": True,
-                          "method": key_info.get("method")})
-
-        self._set_step(3, "解密数据库")
-        reader = reader_mod.WeChatDBReader(db_dir=db_dir, key=key_info["key"],
-                                            version=version)
+        per_account = out.get("per_account") or []
+        if per_account:
+            for pa in per_account:
+                self._log.append({
+                    "kind": "step",
+                    "ok": bool(pa.get("dbs_ok")),
+                    "account": pa.get("account_id"),
+                    "dbs_total": pa.get("dbs_total"),
+                    "dbs_ok": pa.get("dbs_ok"),
+                    "dbs_failed": pa.get("dbs_failed"),
+                    "key_method": pa.get("key_method"),
+                    "messages": pa.get("messages"),
+                })
 
         self._set_step(4, "读取消息（按联系人筛选）")
-        try:
-            if incremental:
-                msgs = reader.get_incremental_messages()
-            else:
-                msgs = list(reader.read_messages(contact_filter=contact_filter))
-        except Exception as e:  # noqa: BLE001
-            self._log.append({"kind": "step", "ok": False, "reason": f"读取失败: {e}"})
-            return
-
         self._set_step(5, "合并去重")
         seen = set(m.get("hash") for m in self._result["messages"] if "hash" in m)
         new_count = 0
-        for msg in msgs:
+        for msg in (out.get("messages") or []):
             k = self._msg_hash(msg)
             if k in seen:
                 continue
@@ -307,8 +301,14 @@ class WechatAutoImporter:
             self._result["messages"].append(msg)
             new_count += 1
         self._message_count += new_count
-        self._result["used"].append({"method": f"db:{key_info.get('method')}",
-                                     "count": new_count})
+        for pa in per_account:
+            self._result["used"].append({
+                "method": f"db:{pa.get('key_method') or 'unknown'}@{pa.get('account_id')}",
+                "count": pa.get("messages", 0),
+            })
+        if not per_account:
+            self._log.append({"kind": "step", "ok": False,
+                              "reason": "未发现任何可导入的微信账号目录"})
 
         self._set_step(6, "完成")
 

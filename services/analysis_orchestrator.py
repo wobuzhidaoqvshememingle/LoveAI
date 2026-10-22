@@ -222,9 +222,15 @@ class AnalysisOrchestrator:
         result = orch.orchestrate(person_id="xxx", chat_text="...", context={...})
     """
 
-    def __init__(self, db: Any = None, config: Any = None) -> None:
+    def __init__(self, db: Any = None, config: Any = None,
+                 digital_twin: Any = None) -> None:
         self._db = db
         self._config = config
+        # 数字分身（可选注入）：供 3l 步 predict_reaction 使用。
+        # 修复前该属性从未被赋值，而 3l 步直接读 self.digital_twin →
+        # 恒 AttributeError 被 except 吞掉，modules_called 恒记 "failed"。
+        # 未注入时为 None，3l 步直接跳过（不产生额外 LLM 调用）。
+        self.digital_twin = digital_twin
         _lazy_import()
         logger.info("AnalysisOrchestrator 初始化完成 db=%s", "有" if db else "无")
 
@@ -544,9 +550,15 @@ class AnalysisOrchestrator:
                     (m.get("content") or "")
                     for m in self._load_recent_messages(person_id, limit=20)
                 ]
-                affection = self._load_affection(person_id)
+                # 修复：原为 affection = self._load_affection(person_id)
+                # （本模块无此方法）→ 恒 AttributeError，predict_reaction 从未跑到；
+                # 且其返回值从未被使用（下方传 affection={}，由 digital_twin 内部
+                # 按 person_id 自取）→ 直接删除该死代码。
                 pred = self.digital_twin.predict_reaction(
-                    user_action=user_message or "",
+                    # 修复：原为 user_message（本模块从未定义）→ 恒 NameError
+                    # 被下面 except 吞掉，predict_reaction 从未真正跑通。
+                    # chat_text 即本轮待分析的对方消息（见 orchestrate docstring）。
+                    user_action=chat_text or "",
                     recent_chats=recent_chats,
                     affection={},  # 好感度由 digital_twin 内部按 person_id 自取
                     context_hint=(strategy_result.get("recommended", [""])

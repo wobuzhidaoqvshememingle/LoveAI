@@ -7,6 +7,10 @@ LoveAI v3.0 - 六维战略评分（Six-Dimension Strategy Scorer）
 - services/strategy_advisor.py:_extract_dimensions：六维人格——本模块**不是**
 - services/strategy_utility.py:fused_choose：五策略效用——本模块**不是**
 
+本模块是维度分层中的**评估层**（六维战略分：reciprocity/reliable/attraction/values/
+feasibility/opportunity_cost），本层维度命名空间见
+person_state_snapshot.py 的 DimensionLayerRegistry。
+
 本模块对**一条候选话术/策略**做现实可行性打分，六个维度各 0-10，总分 0-60：
     a. reciprocal       互惠：双方投入是否对等（sent vs received 条数/字数）
     b. reliable         可靠：对方承诺兑现率（从聊天记录搜承诺词与兑现词）

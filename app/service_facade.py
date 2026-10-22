@@ -28,6 +28,49 @@ except Exception:
 logger = logging.getLogger("LoveAI.bridge")
 
 
+# ------------------------------------------------------------------ #
+# 【回复】链路：候选话术统一提取（唯一数据源 = orchestration["candidates"]）
+# ------------------------------------------------------------------ #
+def collect_reply_candidates(orchestration_result: Any,
+                             llm_structured: Any = None,
+                             suggested_reply: str = "") -> list:
+    """从生产真实数据源提取最多 3 条候选话术，供【回复】能力统一使用。
+
+    优先级：
+      1. orchestration_result["candidates"]
+         ← services/auto_strategy_pipeline.py::_build_candidates 真实产出的 3 条话术
+           （services/analysis_orchestrator.py 透传到 orchestration_result["candidates"]）；
+      2. llm_structured["reply_suggestions"] —— LLM 结构化输出的建议回复；
+      3. suggested_reply —— 单条字符串兜底。
+
+    修复背景（R-Reply）：生产侧一直有 3 条候选话术，但此前只留在嵌套的
+    data["orchestration"]["candidates"] 里，没有透传到 data 顶层；而 UI 三个候选框只认
+    顶层的 reply_candidates/replies/suggested_replies/reply_options，两边键名对不上，
+    导致三个候选框与「回复建议」卡片恒空。
+    """
+    out: list = []
+    orch = orchestration_result if isinstance(orchestration_result, dict) else {}
+    raw = orch.get("candidates")
+    if isinstance(raw, (list, tuple)):
+        for item in raw:
+            if isinstance(item, str):
+                out.append(item)
+            elif isinstance(item, dict):
+                out.append(str(item.get("text") or item.get("reply")
+                               or item.get("content") or ""))
+    if not out and isinstance(llm_structured, dict):
+        for item in (llm_structured.get("reply_suggestions") or []):
+            if isinstance(item, str):
+                out.append(item)
+            elif isinstance(item, dict):
+                out.append(str(item.get("content") or item.get("text")
+                               or item.get("reply") or ""))
+    if not out and isinstance(suggested_reply, str) and suggested_reply.strip():
+        out.append(suggested_reply)
+    cleaned = [c.strip() for c in out if isinstance(c, str) and c.strip()]
+    return cleaned[:3]
+
+
 class ServiceFacade:
     """服务门面层：向 UI 层暴露统一 API，直接返回 dict。
 
@@ -1303,10 +1346,21 @@ class ServiceFacade:
                     logger.warning("LLM分析失败: %s", e)
 
         # 4.5 统一分析编排器：场景识别 + 按需调用6个孤岛模块 + 串联执行
+        # v3.2.0 (P0-1)：注入真实 digital_twin 实例（M2-1/M2-2 预测闭环）。
+        # 修复前此处未传 digital_twin → 编排器 3l 步恒跳过，UI 看到的
+        # confidence=0.5 是 facade 层常量回填。现在按 person_id 取真实 twin。
+        # PredictionLoop 状态机（PREDICTING→AWAITING_REACTION→OBSERVING→
+        # ASSIMILATING）只更新 snapshot 先验，不改 twin prompt。
         orchestration_result = None
+        twin_instance = None
+        pred_loop_status = None
         try:
             from services.analysis_orchestrator import AnalysisOrchestrator
-            orch = AnalysisOrchestrator(db=self._db, config=self._config)
+            from services.prediction_loop import get_loop
+            twin_instance = self._get_or_create_twin(person_id)
+            orch = AnalysisOrchestrator(
+                db=self._db, config=self._config, digital_twin=twin_instance,
+            )
             orchestration_result = orch.orchestrate(
                 person_id=person_id,
                 chat_text=chat_text,
@@ -1316,9 +1370,18 @@ class ServiceFacade:
                     "relation": llm_structured.get("situation", {}),
                 },
             )
-            logger.info("编排器执行完成 scene=%s modules=%s",
+            # 把 PredictionLoop 的库存偏移挂进编排结果（只读视图，不改 twin）
+            try:
+                loop = get_loop(person_id)
+                pred_loop_status = loop.status()
+                if isinstance(orchestration_result, dict):
+                    orchestration_result["prediction_loop"] = pred_loop_status
+            except Exception as _ple:
+                logger.debug("PredictionLoop 状态挂载失败（忽略）: %s", _ple)
+            logger.info("编排器执行完成 scene=%s modules=%s twin_injected=%s",
                         orchestration_result.get("scene", {}).get("name", "?"),
-                        orchestration_result.get("modules_called", {}))
+                        orchestration_result.get("modules_called", {}),
+                        bool(twin_instance))
         except Exception as e:
             logger.warning("编排器执行失败: %s", e)
 
@@ -1500,6 +1563,12 @@ class ServiceFacade:
                     # 回写到 orchestrator 结果 dict（不删既有字段，只加 twin_reaction）
                     if isinstance(twin_reaction, dict):
                         orchestration_result["twin_reaction"] = twin_reaction
+                        # 【预测】链路修复：此处是含侧写+场景+策略上下文的权威预测，
+                        # 覆盖编排器 3l 步留下的常量兜底，使输出卡「预测」字段拿到
+                        # 真实个性化预测（消费侧读 orchestration["prediction"]）。
+                        if (twin_reaction.get("possible_replies")
+                                or twin_reaction.get("inner_thought")):
+                            orchestration_result["prediction"] = twin_reaction
                         # --- 10.7.3 task_hint 灌进 task_engine ---
                         task_hint = twin_reaction.get("task_hint") or twin_reaction.get("task_hints")
                         if task_hint:
@@ -1528,6 +1597,12 @@ class ServiceFacade:
                 logger.warning("digital_twin.predict_reaction 失败: %s", e)
                 twin_reaction = None
 
+        # 10.9 【回复】链路修复：把生产真实候选话术统一提取出来
+        #      （唯一数据源 = orchestration["candidates"]），下面透传到 data 顶层，
+        #      供三个候选框 / 「回复建议」卡片 / 一键填入 / 输出卡共用同一数据源。
+        reply_candidates = collect_reply_candidates(
+            orchestration_result, llm_structured, suggested_reply)
+
         # 11. 组装完整结果（8模块 + 后台服务状态）
         return {
             "module": "chat_analysis",
@@ -1549,6 +1624,9 @@ class ServiceFacade:
                 # 模块6: 建议回复
                 "suggested_reply": suggested_reply,
                 "reply_suggestions": llm_structured.get("reply_suggestions", []),
+                # 【回复】链路修复：真实候选话术透传到 data 顶层（与上面 4 个出口同源）
+                "reply_candidates": reply_candidates,
+                "reply": reply_candidates[0] if reply_candidates else suggested_reply,
                 # 策略审查结果（借鉴Codex PR Review）
                 "reply_review": reply_review,
                 # 模块7: 安全检测
@@ -2496,12 +2574,24 @@ class ServiceFacade:
                     return factory.get_twin(person_id)
                 elif hasattr(factory, 'create_twin'):
                     return factory.create_twin(person_id)
-            # 直接创建DigitalTwin
+                elif callable(factory):
+                    # 应用注册的是工厂函数（app/application.py:783 _create_digital_twin），
+                    # 与真实应用路径一致，直接调用即可（内部已做 person_id 绑定与缓存）。
+                    return factory(person_id)
+            # 直接创建DigitalTwin（无工厂时的兜底）
             if not hasattr(self, '_twins_cache'):
                 self._twins_cache = {}
             if person_id not in self._twins_cache:
                 from services.digital_twin import DigitalTwin
-                self._twins_cache[person_id] = DigitalTwin(self._db, self._llm)
+                # 修复：原为 DigitalTwin(self._db, self._llm)，与
+                # __init__(person_id, db, llm, rag, ...) 位置不符 →
+                # TypeError，twin 恒 None（「预测」字段因此永远拿不到真实预测）。
+                self._twins_cache[person_id] = DigitalTwin(
+                    person_id=person_id,
+                    db=self._db,
+                    llm=self._llm,
+                    rag=self.services.get("rag"),
+                )
             return self._twins_cache[person_id]
         except Exception as e:
             logger.debug(f"创建数字分身失败: {e}")
@@ -4028,7 +4118,15 @@ class ServiceFacade:
             if not twin:
                 return {"ok": False, "error": "数字分身未就绪"}
             affection = self._affection_engine.get_current(person_id) if self._affection_engine else {}
-            result = twin.predict_reaction(user_action, recent_chats=[], affection=affection)
+            # 历史来源与 _run_analysis / _run_background_services 同一条链：那两处直接用入参
+            # chat_text，本入口没有该入参，故取 chat_text 的上游来源（main_window 生成
+            # chat_text 用的同一个方法 get_chat_messages），窗口与字段口径对齐（末 10 条、
+            # dict 形态 direction/content，digital_twin._format_chats 原生支持）。
+            history = self.get_chat_messages(person_id, limit=10)
+            recent_chats = [{"direction": m.get("direction", ""), "content": m.get("content", "")}
+                            for m in ((history.get("data") or {}).get("messages") or [])
+                            if (m.get("content") or "").strip()]
+            result = twin.predict_reaction(user_action, recent_chats=recent_chats, affection=affection)
             return {"ok": True, "data": result}
         except Exception as e:
             logger.exception("predict_reaction 失败")
@@ -4041,7 +4139,12 @@ class ServiceFacade:
             if not twin:
                 return {"ok": False, "error": "数字分身未就绪"}
             affection = self._affection_engine.get_current(person_id) if self._affection_engine else {}
-            reply = twin.simulate_reply(context, recent_chats=[], affection=affection)
+            # 同上：历史取自 chat_text 的上游来源（get_chat_messages），口径与 _run_analysis 一致。
+            history = self.get_chat_messages(person_id, limit=10)
+            recent_chats = [{"direction": m.get("direction", ""), "content": m.get("content", "")}
+                            for m in ((history.get("data") or {}).get("messages") or [])
+                            if (m.get("content") or "").strip()]
+            reply = twin.simulate_reply(context, recent_chats=recent_chats, affection=affection)
             return {"ok": True, "data": {"reply": reply}}
         except Exception as e:
             logger.exception("simulate_reply 失败")
@@ -4054,7 +4157,12 @@ class ServiceFacade:
             if not twin:
                 return {"ok": False, "error": "数字分身未就绪"}
             affection = self._affection_engine.get_current(person_id) if self._affection_engine else {}
-            result = twin.compare_options(option_a, option_b, recent_chats=[], affection=affection)
+            # 同上：历史取自 chat_text 的上游来源（get_chat_messages），口径与 _run_analysis 一致。
+            history = self.get_chat_messages(person_id, limit=10)
+            recent_chats = [{"direction": m.get("direction", ""), "content": m.get("content", "")}
+                            for m in ((history.get("data") or {}).get("messages") or [])
+                            if (m.get("content") or "").strip()]
+            result = twin.compare_options(option_a, option_b, recent_chats=recent_chats, affection=affection)
             # ---- 六维战略评分（追加字段，不破坏现有结构） ----
             try:
                 from services.six_dim_strategy import SixDimensionStrategyScorer
@@ -4928,8 +5036,11 @@ class ServiceFacade:
                     "used": [], "skipped": [], "log": []}
         try:
             r = importer.auto_import(person_id="all", enable_advanced=False)
-            return {"ok": True, "total": r.get("total_messages", 0),
-                    "used": r.get("successful", []), "skipped": r.get("failed", []),
+            # 【断点修复】auto_import 返回的键是 {"messages","used","skipped","total","log"}，
+            # 旧实现读的是 total_messages / successful / failed 这三个根本不存在的键
+            # → total 恒为 0、used/skipped 恒为空。这里改用真实键名。
+            return {"ok": True, "total": r.get("total", 0),
+                    "used": r.get("used", []), "skipped": r.get("skipped", []),
                     "log": r.get("log", [])}
         except Exception as e:
             return {"ok": False, "error": str(e), "total": 0,
@@ -5209,14 +5320,42 @@ class ServiceFacade:
             return {"ok": False, "error": str(e)}
 
     def wechat_extract_key(self, enable_high_risk=False):
-        """手动触发微信密钥提取（多方法自动尝试）。"""
+        """手动触发微信密钥提取（多方法自动尝试，低风险优先）。
+
+        【断点修复】旧实现是 `extractor.extract_key_auto(enable_high_risk=...)`，
+        漏了必填的第一个参数 db_path → 必然 TypeError。
+        这里先由一键导入模块扫出探针库（4.x 优先 db_storage\\message\\message_0.db，
+        3.x 优先 Msg\\MSG0.db），再带着 db_path 调阶梯提取。
+        """
         try:
             extractor = self._wechat_key_extractor
             if extractor is None:
                 return {"ok": False, "error": "密钥提取器未初始化"}
-            return extractor.extract_key_auto(enable_high_risk=enable_high_risk)
+            probe_db, family = self._wechat_probe_db()
+            if not probe_db:
+                return {"ok": False,
+                        "error": "未发现可用的微信数据库，无法确定 db_path（请先执行发现）"}
+            return extractor.extract_key_auto(probe_db, version=family,
+                                              enable_high_risk=enable_high_risk)
         except Exception as e:
             return {"ok": False, "error": str(e)}
+
+    def _wechat_probe_db(self):
+        """扫候选根挑一个探针库，返回 (db_path, version_family)。"""
+        try:
+            from services.wechat_oneclick import (scan_roots, list_accounts,
+                                                  figure_family, pick_probe_db)
+            for r in scan_roots(None):
+                if not r.get("exists"):
+                    continue
+                for a in list_accounts(r["path"]):
+                    fam = figure_family(a.get("layout"))
+                    p = pick_probe_db(a["path"], fam)
+                    if p:
+                        return p, fam
+        except Exception as e:
+            logger.debug("探测微信探针库失败: %s", e)
+        return None, "4.x"
 
     def wechat_detect_process(self):
         """检测微信进程状态和版本。"""
@@ -5225,6 +5364,172 @@ class ServiceFacade:
             if extractor is None:
                 return {"ok": False, "error": "密钥提取器未初始化"}
             return {"ok": True, "data": extractor.detect_wechat_process()}
+        except Exception as e:
+            return {"ok": False, "error": str(e)}
+
+    # ------------------------------------------------------------------ #
+    # 微信聊天记录「一键导入」总控（WechatOneClick 契约入口）
+    # 契约：discover / run / get_progress / cancel / high_risk_available /
+    #       acquire_key_high_risk —— 签名与返回结构与 UI 侧一字不差。
+    # 红线：注入类动作（wx_key.dll / frida / chatlog_alpha）无显式知情同意时永不触发。
+    # ------------------------------------------------------------------ #
+
+    @property
+    def _wechat_oneclick(self):
+        """懒加载微信一键导入总控（services/wechat_oneclick.py）。"""
+        return self.services.get("wechat_oneclick")
+
+    def wechat_oneclick_discover(self, extra_roots=None):
+        """发现：扫全部候选根，列出全部账号 + 版本/密钥状态 + 工具在位情况。"""
+        try:
+            svc = self._wechat_oneclick
+            if svc is None:
+                return {"ok": False, "error": "微信一键导入服务未初始化"}
+            return {"ok": True, "data": svc.discover(extra_roots=extra_roots)}
+        except Exception as e:
+            logger.exception("wechat_oneclick_discover 失败")
+            return {"ok": False, "error": str(e)}
+
+    def wechat_oneclick_run(self, account_ids=None, contact_filter=None,
+                            incremental=False, consent_high_risk=False,
+                            acquire_key_if_missing=False, consent_injection=False):
+        """一键导入：发现→认版本→取密钥→解密→导入。
+
+        低风险路线全程无人值守（不弹命令行、不需手动登录、不需自己跑工具）；
+        有缓存密钥时**微信未运行也能跑通**。
+        consent_high_risk 只允许在 UI 侧已取得用户显式知情同意后传 True。
+
+        —— 以下两个参数为**追加**（原契约字段名与返回结构一律不变）——
+        acquire_key_if_missing：某账号无缓存密钥时，先跑「微信密钥现场抓取」流程
+            （services/wechat_key_controller.WeChatKeyFlow）再走解密→入库。
+        consent_injection：注入控制器 DLL 的显式知情同意。**两者都为 True 才会注入**；
+            否则连微信都不会被关闭，直接返回人话原因 + next_action。
+        """
+        try:
+            svc = self._wechat_oneclick
+            if svc is None:
+                return {"ok": False, "error": "微信一键导入服务未初始化"}
+            return {"ok": True, "data": svc.run(
+                account_ids=account_ids, contact_filter=contact_filter,
+                incremental=incremental, consent_high_risk=consent_high_risk,
+                acquire_key_if_missing=acquire_key_if_missing,
+                consent_injection=consent_injection)}
+        except Exception as e:
+            logger.exception("wechat_oneclick_run 失败")
+            return {"ok": False, "error": str(e)}
+
+    def wechat_oneclick_progress(self):
+        """查询一键导入进度：stage/percentage/account_id/db_index/db_total/..."""
+        try:
+            svc = self._wechat_oneclick
+            if svc is None:
+                return {"ok": False, "error": "微信一键导入服务未初始化"}
+            return {"ok": True, "data": svc.get_progress()}
+        except Exception as e:
+            return {"ok": False, "error": str(e)}
+
+    def wechat_oneclick_cancel(self):
+        """取消正在跑的一键导入。"""
+        try:
+            svc = self._wechat_oneclick
+            if svc is None:
+                return {"ok": False, "error": "微信一键导入服务未初始化"}
+            svc.cancel()
+            return {"ok": True, "data": {"cancelled": True}}
+        except Exception as e:
+            return {"ok": False, "error": str(e)}
+
+    def wechat_oneclick_highrisk_status(self):
+        """高风险路线（wx_key.dll 注入）可用性——只检测，绝不执行。"""
+        try:
+            svc = self._wechat_oneclick
+            if svc is None:
+                return {"ok": False, "error": "微信一键导入服务未初始化"}
+            return {"ok": True, "data": svc.high_risk_available()}
+        except Exception as e:
+            return {"ok": False, "error": str(e)}
+
+    def wechat_oneclick_acquire_key_high_risk(self, wait_seconds=180):
+        """走「现场抓取」彻底拿一次密钥并写进机器指纹加密缓存。
+
+        **必须先有用户显式知情同意**：调用它即视为 UI 侧已弹过确认框。
+        实现已升级为程序自动执行（services/wechat_key_controller.WeChatKeyFlow）：
+        程序自己完成 检测→关闭微信→重启→前台化→等待扫码（或代点登录）→注入 DLL
+        →轮询回收密钥→写加密缓存→CleanupHook 卸载。
+        注入完成后会调用 CleanupHook 干净卸载，正常情况下**不需要重启微信**；
+        若中途异常退出导致微信异常，重启微信即可。存在账号风控风险。
+        """
+        try:
+            svc = self._wechat_oneclick
+            if svc is None:
+                return {"ok": False, "error": "微信一键导入服务未初始化"}
+            return {"ok": True, "data": svc.acquire_key_high_risk(
+                wait_seconds=int(wait_seconds))}
+        except Exception as e:
+            logger.exception("wechat_oneclick_acquire_key_high_risk 失败")
+            return {"ok": False, "error": str(e)}
+
+    # ------------------------------------------------------------------ #
+    # 微信密钥现场抓取（WeChatKeyFlow）——1–7 步的门面
+    # 契约固定 stage：detect / kill / launch / foreground / wait_login /
+    #                inject / poll_key / persist / cleanup
+    # 红线：wechat_keyflow_run 默认 consent_injection=False，此时**不关微信、不注入**，
+    #       只返回人话原因 + next_action；注入必须由 UI 先弹知情同意再传 True。
+    # ------------------------------------------------------------------ #
+
+    @property
+    def _wechat_keyflow(self):
+        """懒加载微信密钥现场抓取编排（services/wechat_key_controller.WeChatKeyFlow）。"""
+        return self.services.get("wechat_keyflow")
+
+    def wechat_keyflow_precheck(self):
+        """只读预检：微信目录/版本与来源/进程/管理员/注入的前置条件。**绝不改状态。**"""
+        try:
+            flow = self._wechat_keyflow
+            if flow is None:
+                return {"ok": False, "error": "微信密钥流程服务未初始化"}
+            return {"ok": True, "data": flow.precheck()}
+        except Exception as e:
+            logger.exception("wechat_keyflow_precheck 失败")
+            return {"ok": False, "error": str(e)}
+
+    def wechat_keyflow_run(self, consent_injection=False, auto_restart=True,
+                           allow_auto_login_click=False):
+        """跑一次「微信生命周期 → 注入 → 回收密钥 → 写缓存」。
+
+        consent_injection=False（默认）时受红线约束：不关闭微信、不注入，
+        立即返回原因与下一步动作。UI 必须先向用户展示确认文案再传 True。
+        """
+        try:
+            flow = self._wechat_keyflow
+            if flow is None:
+                return {"ok": False, "error": "微信密钥流程服务未初始化"}
+            return {"ok": True, "data": flow.run(
+                consent_injection=bool(consent_injection),
+                auto_restart=bool(auto_restart),
+                allow_auto_login_click=bool(allow_auto_login_click))}
+        except Exception as e:
+            logger.exception("wechat_keyflow_run 失败")
+            return {"ok": False, "error": str(e)}
+
+    def wechat_keyflow_progress(self):
+        """查询现场抓取进度：stage/stage_name/percentage/detail/running。"""
+        try:
+            flow = self._wechat_keyflow
+            if flow is None:
+                return {"ok": False, "error": "微信密钥流程服务未初始化"}
+            return {"ok": True, "data": flow.get_progress()}
+        except Exception as e:
+            return {"ok": False, "error": str(e)}
+
+    def wechat_keyflow_cancel(self):
+        """取消正在跑的现场抓取（会触发 CleanupHook 收尾）。"""
+        try:
+            flow = self._wechat_keyflow
+            if flow is None:
+                return {"ok": False, "error": "微信密钥流程服务未初始化"}
+            flow.cancel()
+            return {"ok": True, "data": {"cancelled": True}}
         except Exception as e:
             return {"ok": False, "error": str(e)}
 

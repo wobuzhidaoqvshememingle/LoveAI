@@ -74,6 +74,63 @@ def known_key(name: str) -> bool:
     """该字段是否在 Blackboard Key 注册表内。"""
     return name in BLACKBOARD_KEYS
 
+
+# ============================================================
+# DimensionLayerRegistry（M3-1 天文分层星表 + M3-2 OS 分层）
+# v3.2.0 新增：四套"几维"命名撞车的文档化约束表。
+# 核心思想：不合并成一张大维度表，而是按抽象层切分，每层独立命名空间，
+# 通过 (person_id, snapshot_version) 共享主键 join。
+# 硬约束：
+#   - 不改任何现有维度名；
+#   - 只有 owner 模块可写本层字段，其他层只读；
+#   - 跨层读取必须走 BLACKBOARD_KEYS 注册表，不直接 import 对方字段。
+# ============================================================
+DimensionLayerRegistry: dict[str, dict] = {
+    "observational": {
+        "layer_name": "观测层（UI 好感度四维）",
+        "owner_module": "app/widgets/quick_panel.py",
+        "dimension_list": ["信任", "吸引", "情感", "承诺"],
+        "granularity": "用户可见的友好命名（粗粒度，0-100 整数展示）",
+        "read_allowed_by": ["ui", "quick_panel"],
+        "write_owner_only": True,
+        "note": "观测者肉眼看到的亮度；从状态层聚合而来，不反向写状态层。",
+    },
+    "state": {
+        "layer_name": "状态层（snapshot 六轴）",
+        "owner_module": "services/affection_engine.py (计算引擎 services/relationship_axes.py)",
+        "dimension_list": ["Trust", "Attraction", "Comfort",
+                           "Investment", "Respect", "Emotional"],
+        "granularity": "系统内部连续状态（0-100 浮点，带置信区间）",
+        "read_allowed_by": ["all_services", "diagnostic", "strategy"],
+        "write_owner_only": True,
+        "note": "当前物理量；由对话弱信号经探针+滑动窗口反推（M1-1/M1-2）。",
+    },
+    "evaluation": {
+        "layer_name": "评估层（六维战略分）",
+        "owner_module": "services/six_dim_strategy.py",
+        "dimension_list": ["reciprocity", "reliable", "attraction",
+                           "values", "feasibility", "opportunity_cost"],
+        "granularity": "对**单条候选话术**的 0-10 分评分（总分 0-60）",
+        "read_allowed_by": ["task_engine", "strategy_advisor"],
+        "write_owner_only": True,
+        "note": "不是关系健康度，是对候选策略的现实可行性打分。",
+    },
+    "diagnostic": {
+        "layer_name": "诊断层（六维人格）",
+        "owner_module": "services/strategy_advisor.py",
+        "dimension_list": ["依恋", "冲突", "爱", "边界", "分化", "情绪稳定"],
+        "granularity": "人格病理分类（连续倾向值 0-1 + 证据原文）",
+        "read_allowed_by": ["persona_analyzer", "strategy"],
+        "write_owner_only": True,
+        "note": "诊断工具输出；基于长期画像，不随单条消息跳变。",
+    },
+}
+
+
+def layer_registry() -> dict:
+    """返回维度分层注册表的只读视图。"""
+    return {k: dict(v) for k, v in DimensionLayerRegistry.items()}
+
 # ---- 字段所有权（阀门白名单）----
 DB_OWNED_FIELDS = frozenset({
     "profile", "affection", "stage", "recent_chats", "tasks", "memory",
@@ -198,6 +255,23 @@ def build_person_snapshot(
         {"direction": m[0], "content": (m[1] or "")[:200]} for m in reversed(msgs)
     ]
     ts["recent_chats"] = now
+
+    # ---- 关系六轴（v3.2.0 P0-3：从探针+滑动窗口真实计算，不再 None 占位）----
+    # 借 M1-1（HRV 滑动窗口）+ M1-2（CCI 探针加权）；纯规则，不调 LLM。
+    # 冷启动/失败时兜底为中性 50 + estimated，绝不抛异常。
+    try:
+        from services.relationship_axes import score_axes_with_probes
+        probe_msgs = [
+            {"content": c.get("content", ""), "direction": c.get("direction", "")}
+            for c in snap["recent_chats"]
+        ]
+        axes_result = score_axes_with_probes(probe_msgs)
+        snap["relationship_axes"] = axes_result
+    except Exception as e:  # noqa: BLE001
+        logger.debug("relationship_axes 计算失败，占位中性: %s", e)
+        snap["relationship_axes"] = {"estimated": True, "axes": {a: 50.0 for a in (
+            "Trust", "Attraction", "Comfort", "Investment", "Respect", "Emotional")}}
+    ts["relationship_axes"] = now
 
     # ---- 活跃任务 top5 ----
     tasks = _safe(

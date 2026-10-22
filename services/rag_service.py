@@ -4,6 +4,7 @@ FTS5 全文检索 + Chroma 向量语义检索双引擎融合，为聊天分析�
 服务层，不依赖 PySide6 / QObject。
 """
 import hashlib
+import io
 import logging
 import os
 import re
@@ -32,6 +33,105 @@ def _import_chromadb():
         _chromadb_module = None
         logger.warning("chromadb 未安装，向量检索将不可用: %s", _e)
     return _chromadb_module, _chromadb_module is not None
+
+
+# ---------------------------------------------------------------------- #
+# 知识库索引：准入与分块（2026-10-17「检索库重建」）
+#
+# 上一轮「资产融入索引风险加固」给两条扫描路径加了两道闸：
+#   1) MAX_INDEX_FILE_BYTES = 8MB  → 单文件超限即**整文件跳过**；
+#   2) EXCLUDED_KNOWLEDGE_DIRS = ("泡妞分类语料",) → **整目录跳过**。
+# 副作用是：knowledge/泡妞分类语料 的 383 个 .txt（150.37 MB）与
+# knowledge/泡妞全本蒸馏/references/m3-model.md（120.06 MB）等大批有效语料
+# 被**永久踢出检索**——库体积好看了，产品却再也检索不到这些内容。
+#
+# 本轮改为**从根因修分块**，而不是靠排除把语料藏起来：
+#   - 读文件不再整读：改流式逐行（_iter_chunk_records + _index_one_file），
+#     单文件多大都不会把内存打爆，因此不需要按体积跳过；
+#   - 分块不再"无标题就整文 1 段"：改「按 Markdown 标题切 + 超长段落按
+#     段落/长度边界二次切」，单块有硬上限 CHUNK_MAX_CHARS，故
+#     "整篇当成 1 段入库"这一立项理由不再成立；
+#   - 去重不再把全表正文拉进内存：改用 content_hash 唯一索引 + INSERT OR IGNORE。
+#
+# 两个常量保留为**可配置项**（机制不删），但默认值改为「不拦」：
+#   - EXCLUDED_KNOWLEDGE_DIRS 默认 ()：默认让全部语料都可被检索到；
+#   - MAX_INDEX_FILE_BYTES 默认 None（不限）：仅作可选保险丝，需要临时封顶时
+#     设为字节数即可（例如 512 * 1024 * 1024）。
+# ---------------------------------------------------------------------- #
+
+#: 单个知识库文件的体积上限（字节）。None = 不限（默认值）。
+#: 分块已改为流式，单文件体积不再影响内存峰值，故不再是提交门的理由。
+MAX_INDEX_FILE_BYTES = None
+
+#: 相对 knowledge/ 的目录路径前缀（不区分大小写、按路径段前缀匹配），整目录跳过。
+#: 默认为空 = 不做整目录排除（所有语料都必须可被检索到）。
+EXCLUDED_KNOWLEDGE_DIRS = ()
+
+#: 分块：单块正文硬上限（字符）。取值论证见 _inventory/检索库重建报告.md：
+#: - build_context 只渲染 content[:300]，段过大对 prompt 无增益；
+#: - FTS5 的 bm25/rank 按行打分，一个 2.3 MB 的段命中任意一个词就以同一名次
+#:   压过所有正常段（实测旧库最长单段 2,306,943 字符，前 10 命中里混着 17 字符
+#:   的纯标题碎块与 36~48 KB 的巨型段，排序毫无意义）；
+#: - 太小则上下文断裂、行数开销放大。折中取 2000 字符（≈中文 1.5~2 个自然段，
+#:   落在任务建议的 1,500~4,000 量级内，偏"可读"一侧）。
+CHUNK_MAX_CHARS = 2000
+
+#: 分块：单块软目标（字符）。累积达到该长度后，遇到下一个段落边界即落一块，
+#: 避免自然段被切碎成大量单行块。
+CHUNK_TARGET_CHARS = 1200
+
+#: 每写入 N 个块提交一次事务（分批提交，避免单事务在低内存机上膨胀）。
+COMMIT_EVERY_CHUNKS = 2000
+
+
+def _limit_desc() -> str:
+    """把 MAX_INDEX_FILE_BYTES 渲染成可写日志的说明文本（None 表示不限）。"""
+    if MAX_INDEX_FILE_BYTES is None:
+        return "不限"
+    return "%.2f MB" % (MAX_INDEX_FILE_BYTES / 1048576.0)
+
+
+def knowledge_scan_skip_reason(fpath: str, knowledge_dir: str):
+    """判断某个知识库文件是否应跳过索引（两条索引路径共用的唯一准入口径）。
+
+    刻意做成模块级函数（而非类内私有方法），便于测试/离线脚本直接 import 复用，
+    保证「验证时跑的过滤逻辑」与「运行时真正生效的过滤逻辑」是同一份实现。
+
+    Args:
+        fpath: 待判定的文件绝对路径。
+        knowledge_dir: 知识库根目录，用于把 fpath 换算成相对路径做目录前缀匹配。
+
+    Returns:
+        None 表示可索引；否则返回 ``(code, detail)`` 二元组，
+        ``code`` ∈ {"excluded", "oversize"}，``detail`` 为可直接写日志的中文说明。
+
+    默认配置下（EXCLUDED_KNOWLEDGE_DIRS 为空且 MAX_INDEX_FILE_BYTES 为 None）
+    本函数恒返回 None——即**不做任何整文件/整目录排除**，这是本轮重建的要求。
+    """
+    if not EXCLUDED_KNOWLEDGE_DIRS and MAX_INDEX_FILE_BYTES is None:
+        # 默认路径：不拦任何文件（也省掉每个文件一次 getsize 系统调用）
+        return None
+    try:
+        rel = os.path.relpath(fpath, knowledge_dir)
+    except Exception:
+        rel = fpath
+    rel_norm = rel.replace("\\", "/").strip("/").lower()
+    for prefix in EXCLUDED_KNOWLEDGE_DIRS:
+        pref = str(prefix).replace("\\", "/").strip("/").lower()
+        if pref and (rel_norm == pref or rel_norm.startswith(pref + "/")):
+            return ("excluded", "目录在 EXCLUDED_KNOWLEDGE_DIRS 内: %s" % prefix)
+    if MAX_INDEX_FILE_BYTES is not None:
+        try:
+            size = os.path.getsize(fpath)
+        except OSError as e:
+            return ("oversize", "无法读取文件体积: %s" % e)
+        if size > MAX_INDEX_FILE_BYTES:
+            return (
+                "oversize",
+                "单文件 %.2f MB 超过 MAX_INDEX_FILE_BYTES=%s"
+                % (size / 1048576.0, _limit_desc()),
+            )
+    return None
 
 
 class RAGService:
@@ -161,9 +261,67 @@ class RAGService:
             import json
             if os.path.exists(self._index_state_file):
                 with open(self._index_state_file, "r", encoding="utf-8") as f:
-                    self._indexed_files = json.load(f)
+                    raw = json.load(f)
+                if isinstance(raw, dict):
+                    # === 键口径迁移（2026-10-17 写侧 source 相对化）===
+                    # 旧状态文件以**开发机绝对路径**为键（实测 832 条，形如
+                    # ``C:\Users\<dev>\...\LoveAI-v2\knowledge\x.md``）。写侧改用相对键
+                    # 后二者对不上；若放任不管，首启会把 832 个文件全部当"未索引"重扫
+                    # 一遍。这里在载入时一次性归一，并立即回写使迁移持久化。
+                    self._indexed_files, migrated = self._normalize_state_keys(raw)
+                    if migrated:
+                        logger.info(
+                            "rag_index_state.json 键口径迁移：%d 条绝对路径键已归一为"
+                            "相对口径（relpath → project_root）", migrated)
+                        self._save_index_state()
+                else:
+                    self._indexed_files = {}
         except Exception:
             self._indexed_files = {}
+
+    def _normalize_state_keys(self, raw: dict):
+        """把索引状态字典里的**绝对路径键**归一为写库同口径的相对键。
+
+        Returns:
+            ``(normalized: dict, migrated: int)``
+
+        - 键已是相对形态 → 原样保留（幂等）；
+        - 键为绝对路径且可换算到 project_root 之内 → 换成 :meth:`_source_key` 相对键；
+        - 归一后若撞车（同一文件同时存在旧绝对键与新相对键）→ 保留**先出现**那条，
+          其值只含 mtime/sections/new，取哪条都不改变"该文件已索引"的语义。
+        """
+        out: dict = {}
+        migrated = 0
+        for k, v in raw.items():
+            nk = k
+            if isinstance(k, str) and os.path.isabs(k):
+                cand = self._source_key(k)
+                if cand != k:
+                    nk = cand
+                    migrated += 1
+            if nk not in out:
+                out[nk] = v
+        return out, migrated
+
+    def _source_key(self, fpath: str) -> str:
+        """``chunks.source`` 的**相对口径**键（与现存 598 个 source 逐字符同形）。
+
+        形态实测（改造前真实库）：``knowledge\\auto-expansion.md`` —— 即
+        **相对 project_root、反斜杠分隔、保留 ``knowledge\\`` 前缀**。因此这里用
+        ``os.path.relpath(fpath, self.project_root)``；**不能**用相对
+        ``knowledge_dir`` 的 relpath，那会丢掉 ``knowledge\\`` 前缀、与现存库不符。
+
+        越界/异常一律退回原始 ``fpath``（``relpath`` 抛 ``ValueError``，或结果以
+        ``..`` 开头说明不在 project_root 之内）——保证口径换算失败时不崩，也绝不
+        写出畸形相对路径。
+        """
+        try:
+            rel = os.path.relpath(fpath, self.project_root)
+        except ValueError:
+            return fpath
+        if rel == os.curdir or rel.startswith(".."):
+            return fpath
+        return rel
 
     def _save_index_state(self) -> None:
         try:
@@ -199,86 +357,372 @@ class RAGService:
         finally:
             self._indexing = False
 
+    # ------------------------------------------------------------------ #
+    # 流式分块（2026-10-17 重建核心）
+    # ------------------------------------------------------------------ #
+    #: Markdown 1~6 级标题（旧实现只认 ##/###，导致一级标题文件被视为"无标题"）
+    _HEADING_RE = re.compile(r"^\s*#{1,6}[ \t]+(.*\S)\s*$")
+
+    #: 标题行长度上限。**超过此长度的行一定是正文，不是标题**。
+    #: 实测：``knowledge/引导恋爱学/引导恋爱学-最终成品-融合优化版.md`` 本身是合法
+    #: UTF-8、但正文已乱码的副本，其中一条「1.4.1 闂傚倸鍊搁……」的**单行**长达
+    #: 74,274 字符；它被 ``^#{1,6}`` 规则误判成小标题后，该节下每一块的
+    #: ``title`` / ``section`` 都被复制进这 74 K 字符，实测使 chunks 表从
+    #: 353 MB 膨胀到 908 MB（+504 MB，占全库 43%）。真实小标题远短于此。
+    _HEADING_MAX_CHARS = 120
+
+    #: 写库时 title / section 的兜底截断，防止任何未来的怪输入再次撑爆行宽。
+    _META_MAX_CHARS = 160
+
+    @classmethod
+    def _clip_meta(cls, text: str) -> str:
+        """把 title / section 这类元信息截断到 ``_META_MAX_CHARS``，附省略号。"""
+        s = (text or "").strip()
+        if len(s) <= cls._META_MAX_CHARS:
+            return s
+        return s[: cls._META_MAX_CHARS] + "…"
+
+    @staticmethod
+    def _hard_split_text(text: str, max_chars: int) -> list:
+        """把超长文本硬切成若干长度 <= max_chars 的片段。
+
+        优先在换行处断开（保住行语义），找不到合适换行才在字符处硬切。
+        返回片段均已 strip，空片段丢弃。
+        """
+        n = len(text)
+        if n <= max_chars:
+            return [text]
+        out: list = []
+        start = 0
+        while start < n:
+            end = min(start + max_chars, n)
+            if end < n:
+                nl = text.rfind("\n", start + (max_chars // 2), end)
+                if nl > start:
+                    end = nl
+            piece = text[start:end].strip()
+            if piece:
+                out.append(piece)
+            start = end
+        return out
+
+    @classmethod
+    def _iter_chunk_records(cls, fh, max_chars: Optional[int] = None,
+                            target_chars: Optional[int] = None):
+        """流式把文本切块，逐块产出 ``{"heading": str, "body": str}``。
+
+        两级切分：
+          1) 先按 Markdown 1~6 级标题切段；标题行**保留在该段正文首行**（与旧
+             `_split_markdown_sections` 一致，便于命中后自解释"这是哪一节"）；
+          2) 段内以空行为段落边界累积，达到软目标 CHUNK_TARGET_CHARS 且落在段落
+             边界上即落一块；任何段落都不得把单块撑过硬上限 CHUNK_MAX_CHARS，
+             超长段落按 换行→字符 硬切。
+
+        **无标题文件同样成立**：没有标题就退化为"按段落/长度切"，不再整文 1 段。
+
+        内存上界 ~O(max_chars)：任何时刻只缓存「当前段落」与「当前待落块」，
+        不缓存整个文件，故 120 MB 单文件也能安全处理（见报告的资源评估）。
+
+        Yields:
+            dict: ``{"heading", "body"}``；``body`` 非空且长度 <= max_chars。
+        """
+        mx = int(max_chars or CHUNK_MAX_CHARS)
+        tg = int(target_chars or CHUNK_TARGET_CHARS)
+        st = {"heading": "", "parts": [], "para": []}
+
+        def _para_text():
+            if not st["para"]:
+                return ""
+            return "\n".join(st["para"]).strip()
+
+        def _push(text):
+            """把一个段落并入当前块，返回『因满而落下的块』列表。"""
+            done = []
+            if not text:
+                return done
+            for piece in cls._hard_split_text(text, mx):
+                if st["parts"] and len("\n\n".join(st["parts"] + [piece])) > mx:
+                    done.append({"heading": st["heading"],
+                                 "body": "\n\n".join(st["parts"])})
+                    st["parts"] = []
+                st["parts"].append(piece)
+                if len("\n\n".join(st["parts"])) >= tg:
+                    done.append({"heading": st["heading"],
+                                 "body": "\n\n".join(st["parts"])})
+                    st["parts"] = []
+            return done
+
+        for raw in fh:
+            line = raw.rstrip("\r\n")
+            # 超长行不可能是标题（见 _HEADING_MAX_CHARS 的实测说明），只当正文
+            m = (cls._HEADING_RE.match(line)
+                 if len(line) <= cls._HEADING_MAX_CHARS else None)
+            if m:
+                for rec in _push(_para_text()):
+                    yield rec
+                st["para"] = []
+                if st["parts"]:
+                    yield {"heading": st["heading"],
+                           "body": "\n\n".join(st["parts"])}
+                    st["parts"] = []
+                st["heading"] = m.group(1).strip()
+                st["para"] = [line]      # 标题行留在正文首行（保持旧行为）
+                continue
+            if not line.strip():
+                for rec in _push(_para_text()):
+                    yield rec
+                st["para"] = []
+                continue
+            st["para"].append(line)
+            if sum(len(x) + 1 for x in st["para"]) > mx:
+                # 无空行的巨型单段：先落盘，防止缓存无界增长
+                for rec in _push(_para_text()):
+                    yield rec
+                st["para"] = []
+        for rec in _push(_para_text()):
+            yield rec
+        if st["parts"]:
+            yield {"heading": st["heading"], "body": "\n\n".join(st["parts"])}
+
+    @staticmethod
+    def _iter_knowledge_files(knowledge_dir: str) -> list:
+        """收集待索引文件（.md/.txt），按「路径浅者优先 + 字母序」排序。
+
+        排序是**确定性去重的前提**：knowledge/ 下存在多份互为镜像的同文文件
+        （实测 playbooks.md 同时存在于 6 处），content_hash 唯一索引只会保留先写入
+        的那一份；排序保证保留的永远是路径最浅、最"正统"的那份，而不是随
+        os.walk 顺序漂移。
+        """
+        out: list = []
+        for root, _dirs, files in os.walk(knowledge_dir):
+            for fname in files:
+                if fname.lower().endswith((".md", ".txt")):
+                    out.append(os.path.join(root, fname))
+
+        def _depth_key(p: str):
+            rel = os.path.relpath(p, knowledge_dir).replace("\\", "/")
+            return (rel.count("/"), rel.lower())
+
+        out.sort(key=_depth_key)
+        return out
+
+    def _index_one_file(self, cur, conn, fpath: str, knowledge_dir: str,
+                        max_chars: int, target_chars: int):
+        """流式索引单个文件，返回 ``(新增块数, 生成块数, 实际编码)``。
+
+        - **不整读文件**：按行迭代，内存上界 ~O(max_chars)；
+        - **不把全表正文拉进内存**：以 content_hash 唯一索引 + INSERT OR IGNORE 判重；
+        - 编码：UTF-8 优先；解码失败则按 GBK 重试，最后 utf-8/replace 兜底。
+          重试是安全的——同正文哈希相同，已写入的块会被 OR IGNORE 吞掉。
+        - ``title`` = ``"<文件名> · <所在小标题>"``（无小标题时就是文件名），
+          ``section`` = 小标题，``discipline`` = 学科映射，保证命中后可读性不坍缩。
+        """
+        fname = os.path.basename(fpath)
+        disc = self._extract_discipline(fpath)
+        # 写库统一用**相对口径** source（见 _source_key）：让"去掉开发机绝对路径
+        # 前缀"的成果沉淀进写侧——解压改 mtime 后重扫、或在终端用户机器上重建，
+        # 都不会再把机器绝对路径写回 chunks.source。
+        src_key = self._source_key(fpath)
+        last = (0, 0, "utf-8")
+        for encoding, errors in (("utf-8", "strict"), ("gbk", "strict"),
+                                 ("utf-8", "replace")):
+            inserted = 0
+            seen = 0
+            try:
+                with open(fpath, "r", encoding=encoding, errors=errors) as fh:
+                    for rec in self._iter_chunk_records(fh, max_chars, target_chars):
+                        body = (rec.get("body") or "").strip()
+                        if not body:
+                            continue
+                        seen += 1
+                        heading = self._clip_meta(rec.get("heading") or "")
+                        title = ("%s · %s" % (fname, heading)) if heading else fname
+                        title = self._clip_meta(title)
+                        digest = hashlib.md5(body.encode("utf-8")).hexdigest()
+                        before = conn.total_changes
+                        cur.execute(
+                            "INSERT OR IGNORE INTO chunks("
+                            "title, content, source, section, discipline, content_hash)"
+                            " VALUES (?, ?, ?, ?, ?, ?)",
+                            (title, body, src_key, heading, disc, digest),
+                        )
+                        if conn.total_changes == before:
+                            continue     # 该正文已在库（镜像文件 / 重跑），不重复入库
+                        cur.execute(
+                            "INSERT INTO fts(rowid, title, content) VALUES (?, ?, ?)",
+                            (cur.lastrowid, title, body),
+                        )
+                        inserted += 1
+            except UnicodeDecodeError:
+                last = (inserted, seen, encoding)
+                logger.debug("文件 %s 用 %s 解码失败，回退下一编码重试", fpath, encoding)
+                continue
+            return inserted, seen, encoding
+        return last
+
+    #: fts 建表语句：**external content**（索引本体只存倒排表，正文按 rowid 回查
+    #: chunks），不再产生逐字复制全部正文的影子表 fts_content。
+    FTS_DDL = ("CREATE VIRTUAL TABLE fts USING fts5("
+               "title, content, content='chunks', content_rowid='id')")
+
+    def _ensure_fts_schema(self, conn) -> bool:
+        """建表 / 迁移到 external-content FTS 结构。返回 True 表示需要全量重建。
+
+        实测真实库结构（2026-10-17 透视；**不要**再用代码里的 IF NOT EXISTS 反推）：
+          - ``chunks(id INTEGER PRIMARY KEY, title, content, source, section, discipline)``
+            148,070 行；旧的建表语句却写着 ``id INTEGER PRIMARY KEY AUTOINCREMENT``
+            且只有 3 列——因 ``IF NOT EXISTS`` 对已存在的库不生效，错配才没炸。
+          - ``fts`` 实际是 **5 列 standalone** ``fts5(title, content, source,
+            section, discipline)``（脚本另写的 3 列 ``content='chunks'`` 建表语句同样
+            因 IF NOT EXISTS 从未生效）。standalone 结构会多出一张影子表
+            ``fts_content``，把 title/正文/source/section/discipline 逐字复制一遍，
+            实测占用 336.70 MB（全库 38.5%）——纯冗余，本次改造即回收这一块。
+          - ``search_fts()`` 的 ``chunks.id = fts.rowid`` JOIN 口径在两种结构下都自洽，
+            所以旧代码"能跑"；真正的问题是 5 列 standalone 下代码只写 3 列，
+            ``source/section/discipline`` 三列恒为空。
+
+        迁移策略（旧结构无法安全原地增量，只能重建）：
+          - ``chunks`` 缺 ``content_hash`` → 补列；历史行哈希为空、唯一索引形同虚设，
+            判重失效 → 标记全量重建；
+          - ``fts`` 非 external content → DROP 后按 FTS_DDL 建新表 → 标记全量重建；
+          - 重建 = 清空 chunks/fts + 丢弃状态文件记忆，由 knowledge/ 文件重新写入。
+        """
+        cur = conn.cursor()
+        need_rebuild = False
+
+        row = cur.execute(
+            "SELECT sql FROM sqlite_master WHERE type='table' AND name='chunks'"
+        ).fetchone()
+        if row is None:
+            cur.execute(
+                "CREATE TABLE chunks ("
+                "id INTEGER PRIMARY KEY, title TEXT, content TEXT, source TEXT, "
+                "section TEXT, discipline TEXT, content_hash TEXT)"
+            )
+        else:
+            cols = {r[1] for r in cur.execute("PRAGMA table_info(chunks)")}
+            # 逐列补齐。注意：**旧代码自己的建表语句**是
+            # `chunks(id INTEGER PRIMARY KEY AUTOINCREMENT, title, content, source)`
+            # ——4 列、没有 section/discipline。也就是说"由旧代码在空目录上新建的库"
+            # 会缺 section/discipline，只有本工程预建的那张库才恰好带这两列。
+            for col in ("title", "content", "source", "section", "discipline",
+                        "content_hash"):
+                if col not in cols:
+                    cur.execute("ALTER TABLE chunks ADD COLUMN %s TEXT" % col)
+                    if col == "content_hash":
+                        # 历史行哈希为空 → 唯一索引形同虚设、判重失效 → 必须全量重建
+                        need_rebuild = True
+
+        fts_row = cur.execute(
+            "SELECT sql FROM sqlite_master WHERE type='table' AND name='fts'"
+        ).fetchone()
+        if fts_row is None:
+            cur.execute(self.FTS_DDL)
+        elif "content='chunks'" not in (fts_row[0] or "").replace('"', "'"):
+            cur.execute("DROP TABLE IF EXISTS fts")
+            cur.execute(self.FTS_DDL)
+            need_rebuild = True
+
+        cur.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_chunks_hash ON chunks(content_hash)")
+        cur.execute(
+            "CREATE INDEX IF NOT EXISTS idx_chunks_source ON chunks(source)")
+
+        if need_rebuild:
+            logger.warning(
+                "unified_search.db 为旧结构（缺 content_hash 或 fts 非 external "
+                "content），清空索引表后按当前分块策略全量重建")
+            cur.execute("DELETE FROM chunks")
+            try:
+                cur.execute("INSERT INTO fts(fts) VALUES('delete-all')")
+            except sqlite3.OperationalError:
+                pass
+            self._indexed_files = {}
+            conn.commit()
+        return need_rebuild
+
     def _ensure_fts_indexed(self) -> int:
-        """确保 FTS 表存在并批量导入 knowledge/ 目录所有 .md/.txt 文件。"""
+        """确保 FTS 表存在，并**流式**索引 knowledge/ 下所有 .md/.txt 文件。
+
+        与旧实现的差异（本次重建的核心）：
+          - 不再 ``SELECT content FROM chunks`` 把全表正文拉进内存（旧实现每次启动
+            都物化 148,070 行 / 131,177,631 字符，实测峰值 RSS 因此多出数百 MB）；
+          - 不再整文件 ``f.read()``：改流式逐行读，120 MB 单文件也能处理；
+          - 不再整目录/整文件跳过（见文件头常量说明）；
+          - 写库 ``source`` 与状态文件键统一**相对 project_root** 口径
+            （``knowledge\\...``，见 ``_source_key``），与现存库 598 个 source
+            逐字符一致；不再把开发机/终端机器绝对路径写进 ``chunks.source``；
+          - 分批提交（COMMIT_EVERY_CHUNKS），避免单事务在低内存机上膨胀。
+        幂等：content_hash 唯一索引 + INSERT OR IGNORE，连跑两次行数不增长。
+        """
         knowledge_dir = os.path.join(self.project_root, "knowledge")
         if not os.path.isdir(knowledge_dir):
             return 0
         conn = None
         try:
             conn = sqlite3.connect(self.fts_db_path)
-            cur = conn.cursor()
-            cur.execute(
-                "CREATE TABLE IF NOT EXISTS chunks ("
-                "id INTEGER PRIMARY KEY AUTOINCREMENT, "
-                "title TEXT, content TEXT, source TEXT)"
-            )
-            # FTS5 外部内容表
-            cur.execute(
-                "CREATE VIRTUAL TABLE IF NOT EXISTS fts USING fts5("
-                "title, content, content='chunks', content_rowid='id')"
-            )
-
-            # === 幂等根因修复（P0）===
-            # 安装释放的是已建好的 unified_search.db，但 rag_index_state.json 首次运行
-            # 全新生成 → 旧逻辑会对已存在 chunks 重复 INSERT、重复召回。
-            # 先载入库中已存在的全部正文集合，只插入缺失段落；按正文去重，与 source
-            # 路径形态无关（建库机/运行机路径不同也能正确判重）。
-            existing_contents: set = set()
+            # 低内存机 + 大库：限制页缓存、临时表落盘，避免把内存压满
             try:
-                cur.execute("SELECT content FROM chunks")
-                existing_contents = {
-                    row[0] for row in cur.fetchall() if row and row[0]
-                }
+                conn.execute("PRAGMA cache_size = -16000")   # ~16 MB 页缓存
+                conn.execute("PRAGMA temp_store = FILE")
             except Exception:
-                existing_contents = set()
+                pass
 
-            # 增量：只索引修改时间变了的文件；文件内按正文去重
+            self._ensure_fts_schema(conn)
+            cur = conn.cursor()
+
             indexed = 0
-            for root, _dirs, files in os.walk(knowledge_dir):
-                for fname in sorted(files):
-                    if not fname.lower().endswith((".md", ".txt")):
-                        continue
-                    fpath = os.path.join(root, fname)
-                    try:
-                        mtime = os.path.getmtime(fpath)
-                    except Exception:
-                        continue
-                    prev = self._indexed_files.get(fpath)
-                    if prev and prev.get("mtime") == mtime:
-                        continue  # 未修改
-                    try:
-                        with open(fpath, "r", encoding="utf-8") as f:
-                            text = f.read()
-                    except Exception:
-                        continue
-                    sections = self._split_markdown_sections(text)
-                    file_new = 0
-                    for sec in sections:
-                        body = (sec.get("body") or "").strip()
-                        if not body:
-                            continue
-                        if body in existing_contents:
-                            continue  # 已在库中（预建库/本批已插），跳过，不重复插入
-                        cur.execute(
-                            "INSERT INTO chunks(title, content, source) VALUES (?, ?, ?)",
-                            (fname, body, fpath),
-                        )
-                        rowid = cur.lastrowid
-                        cur.execute(
-                            "INSERT INTO fts(rowid, title, content) VALUES (?, ?, ?)",
-                            (rowid, fname, body),
-                        )
-                        existing_contents.add(body)
-                        indexed += 1
-                        file_new += 1
-                    # 无论是否新增段落，都据当前文件校正状态（对接已建库时状态为空）
-                    self._indexed_files[fpath] = {
-                        "mtime": mtime,
-                        "sections": len(sections),
-                        "new": file_new,
-                    }
+            pending = 0
+            skipped_excluded = 0
+            skipped_oversize = 0
+
+            for fpath in self._iter_knowledge_files(knowledge_dir):
+                # 准入过滤（默认配置下恒为 None，即不拦任何文件）
+                skip = knowledge_scan_skip_reason(fpath, knowledge_dir)
+                if skip is not None:
+                    if skip[0] == "oversize":
+                        skipped_oversize += 1
+                    else:
+                        skipped_excluded += 1
+                    logger.debug("跳过知识库文件（%s）: %s", skip[1], fpath)
+                    continue
+                try:
+                    mtime = os.path.getmtime(fpath)
+                except Exception:
+                    continue
+                # 状态文件键与写库 source 同口径（相对 project_root）。若仍用绝对
+                # 路径作键，将与改写后的相对键对不上，首启把全部文件当"未索引"
+                # 重扫一遍（详见 _source_key / _normalize_state_keys）。
+                src_key = self._source_key(fpath)
+                prev = self._indexed_files.get(src_key)
+                if prev and prev.get("mtime") == mtime:
+                    continue  # 未修改
+                try:
+                    n_new, n_seen, _enc = self._index_one_file(
+                        cur, conn, fpath, knowledge_dir,
+                        CHUNK_MAX_CHARS, CHUNK_TARGET_CHARS)
+                except Exception as e:
+                    logger.warning("索引知识库文件失败 %s: %s", fpath, e)
+                    continue
+                indexed += n_new
+                pending += n_new
+                # 无论是否新增段落，都据当前文件校正状态（对接已建库时状态为空）
+                self._indexed_files[src_key] = {
+                    "mtime": mtime,
+                    "sections": n_seen,
+                    "new": n_new,
+                }
+                if pending >= COMMIT_EVERY_CHUNKS:
+                    conn.commit()
+                    pending = 0
+
             conn.commit()
+            if skipped_oversize or skipped_excluded:
+                logger.info(
+                    "FTS 准入过滤：跳过 %d 个超限单文件(>%s) 与 %d 个被排除目录文件；"
+                    "调整 MAX_INDEX_FILE_BYTES / EXCLUDED_KNOWLEDGE_DIRS 可改变此行为",
+                    skipped_oversize, _limit_desc(), skipped_excluded,
+                )
             return indexed
         except Exception as e:
             logger.warning(f"FTS 索引失败: {e}")
@@ -445,12 +889,25 @@ class RAGService:
     def _preprocess_fts_query(query: str) -> str:
         """将原始 query 转换为安全且对中文友好的 FTS5 MATCH 表达式。
 
-        实际库用默认 unicode61 分词器，CJK 按**单字**切分。若把整句中文包成
-        一个引号短语，会要求整串精确相邻、几乎无法命中。因此：
-        - 每个 CJK 段：整段短语（精确命中、排名最高）+ 滑动二元组（语义主力），
-          单字段直接用单字；
+        **分词器实测事实（2026-10-17 权威探针，纠正旧注释的错误认知）**：
+        真实库用默认 unicode61 分词器，它**不按单字切分 CJK**，而是把一段连续的
+        CJK 当作 **1 个 token**——实测 ``开场白类型`` / ``假性时间限制`` /
+        ``废物测试识别与应对`` 各为单个 token，因此
+        ``MATCH "开场白"`` **匹配不到** ``开场白类型``（0 命中），而
+        ``MATCH 开场白*`` 前缀查询能命中。
+
+        据此本函数的构造规则：
+        - 每个 CJK 段：整段短语（精确命中、排名最高）+ 整段前缀（补住"查询词只是
+          某个长 token 的开头"的漏召回，见下）+ 滑动二元组；
         - 拉丁/数字：按词；
-        - 全部以 OR 连接（FTS 按相关度排序），去重并限量，特殊字符安全。
+        - 全部 OR 连接、去重、限量（24 项），特殊字符安全。
+
+        **已知召回上限（未解决，如实记录）**：短语、整段前缀、二元组都只能命中
+        "token 与之整串相等、或 token 以之开头"的情形；当查询词落在某个更长 CJK
+        token 的**中间**时无法召回——例如 token ``假性时间限制`` 不会被查询
+        ``时间限制`` 命中（实测 0 命中）。要解决需换分词器（如 trigram）或双写一份
+        CJK 二元组倒排，都会显著改变索引体积与排序语义，本轮不动。
+        详见 _inventory/检索库重建报告.md「残余风险」。
         """
         if not query:
             return ""
@@ -460,7 +917,12 @@ class RAGService:
             if len(run) == 1:
                 terms.append(run)
             else:
-                terms.append(f'"{run}"')  # 整段短语
+                terms.append(f'"{run}"')  # 整段短语（精确命中，排名最高）
+                # 整段前缀：unicode61 把连续 CJK 当作 1 个 token，若查询词只是某个
+                # 长 token 的开头（查询"红丸米格道" vs token"红丸米格道语料内容"），
+                # 只有前缀查询能命中。严格增量：只会多召回、不会少召回
+                # （实测 柯李思 2→8、米格道 23→32、依恋类型 1928→2083 命中）。
+                terms.append(f'"{run}"*')
                 for i in range(len(run) - 1):  # 滑动二元组
                     terms.append(f'"{run[i:i+2]}"')
         for word in re.findall(r"[A-Za-z0-9]+", query):
@@ -481,8 +943,15 @@ class RAGService:
     def search_fts(self, query: str, top_k: int = 5) -> list:
         """FTS5 全文检索。
 
-        实际库结构：`fts` 为 fts5 外部内容虚表（仅索引 content/title），
-        元数据（source）存于 `chunks`，通过 rowid=id 关联。
+        实际库结构（2026-10-17 实测 + 本次重建统一）：``fts`` 为 **external
+        content** 虚表 ``fts5(title, content, content='chunks', content_rowid='id')``，
+        索引本体只含 title/content 两列的倒排表；source/section/discipline 等元数据
+        存于 ``chunks``，通过 ``fts.rowid == chunks.id`` 关联。
+        （旧库曾是 5 列 standalone 结构、库内多出一张冗余影子表 fts_content；
+        本次重建已改造为 external content，见 ``_ensure_fts_schema``。）
+
+        注：``section`` 未单独进 FTS 索引——小标题已写在 ``chunks.title``
+        与该段正文首行里，再索引一遍只增体积、不改召回。
 
         Args:
             query: 查询语句。
@@ -495,11 +964,11 @@ class RAGService:
         if not match_expr:
             return []
 
-        # 外部内容 FTS5：fts 虚表 JOIN chunks 取 source
+        # external content FTS5：fts 虚表 JOIN chunks 取元数据
         sql = (
             "SELECT chunks.title, chunks.content, chunks.source, fts.rank "
             "FROM fts JOIN chunks ON chunks.id = fts.rowid "
-            "WHERE fts MATCH ? ORDER BY rank LIMIT ?"
+            "WHERE fts MATCH ? ORDER BY fts.rank LIMIT ?"
         )
 
         results: list = []
@@ -796,31 +1265,44 @@ class RAGService:
             return 0
 
         indexed = 0
-        for root, _dirs, files in os.walk(knowledge_dir):
-            for fname in sorted(files):
-                if not fname.lower().endswith(".md"):
-                    continue
-                fpath = os.path.join(root, fname)
-                try:
-                    with open(fpath, "r", encoding="utf-8") as f:
-                        text = f.read()
-                except Exception as e:
-                    logger.warning(f"读取知识库文件失败 {fpath}: {e}")
-                    continue
+        skipped_excluded = 0
+        skipped_oversize = 0
+        for fpath in self._iter_knowledge_files(knowledge_dir):
+            if not fpath.lower().endswith(".md"):
+                continue
+            # 准入过滤：与 _ensure_fts_indexed 共用同一个判定函数，保证两条索引
+            # 路径口径一致。默认配置下恒为 None（不拦任何文件）——上一轮"整目录
+            # 排除 + 单文件上限"已按重建要求取消，见文件头常量说明。
+            skip = knowledge_scan_skip_reason(fpath, knowledge_dir)
+            if skip is not None:
+                if skip[0] == "oversize":
+                    skipped_oversize += 1
+                else:
+                    skipped_excluded += 1
+                logger.debug("跳过知识库文件（%s）: %s", skip[1], fpath)
+                continue
 
-                sections = self._split_markdown_sections(text)
-                for idx, sec in enumerate(sections):
-                    heading = sec.get("heading", "")
-                    body = sec.get("body", "").strip()
+            fname = os.path.basename(fpath)
+            discipline = self._extract_discipline(fpath)
+            # 流式：不整读文件，逐块 upsert
+            try:
+                fh = open(fpath, "r", encoding="utf-8", errors="replace")
+            except Exception as e:
+                logger.warning(f"读取知识库文件失败 {fpath}: {e}")
+                continue
+            try:
+                for idx, sec in enumerate(self._iter_chunk_records(fh)):
+                    heading = self._clip_meta(sec.get("heading") or "")
+                    body = (sec.get("body") or "").strip()
                     if not body:
                         continue
 
                     doc_id = hashlib.md5(
                         f"{fpath}::{idx}".encode("utf-8")
                     ).hexdigest()
-                    discipline = self._extract_discipline(fpath)
+                    title = ("%s · %s" % (fname, heading)) if heading else fname
                     metadata = {
-                        "title": fname,
+                        "title": self._clip_meta(title),
                         "source": fpath,
                         "section": heading,
                         "discipline": discipline,
@@ -836,15 +1318,32 @@ class RAGService:
                         logger.warning(
                             f"Chroma upsert 失败 ({fpath}#{idx}): {e}"
                         )
+            finally:
+                try:
+                    fh.close()
+                except Exception:
+                    pass
 
+        if skipped_oversize or skipped_excluded:
+            logger.info(
+                "Chroma 准入过滤：跳过 %d 个超限单文件(>%s) 与 %d 个被排除目录文件",
+                skipped_oversize,
+                _limit_desc(),
+                skipped_excluded,
+            )
         logger.info(f"知识库索引完成，共写入 {indexed} 个段落")
         return indexed
 
-    @staticmethod
-    def _split_markdown_sections(text: str) -> list:
-        """按 Markdown 二级/三级标题切分文本。
+    @classmethod
+    def _split_markdown_sections(cls, text: str) -> list:
+        """按 Markdown 标题 + 长度边界切分文本（兼容保留入口）。
 
-        首个标题之前的内容归入"前言"段。
+        **行为已变更（2026-10-17 检索库重建）**：旧实现只认 ``##``/``###``，
+        且"全文无标题时整篇作为 1 段"——这正是旧库出现 2,306,943 字符单段的成因。
+        现在本方法只是流式分块 ``_iter_chunk_records`` 的兼容封装：
+        - 标题识别放宽到 1~6 级；
+        - 无标题文本按 段落/长度 边界切分，不再整文 1 段；
+        - 单段 body 长度有硬上限 CHUNK_MAX_CHARS。
 
         Args:
             text: 原始 Markdown 文本。
@@ -852,30 +1351,7 @@ class RAGService:
         Returns:
             list[dict]：[{"heading": str, "body": str}, ...]
         """
-        lines = text.splitlines()
-        sections: list = []
-        cur_heading = ""
-        buf: list[str] = []
-
-        def flush():
-            body = "\n".join(buf).strip()
-            if body:
-                sections.append({"heading": cur_heading, "body": body})
-
-        for line in lines:
-            if re.match(r"^#{2,3}\s+", line):
-                # 遇到新标题：先收尾上一段
-                flush()
-                cur_heading = line.lstrip("#").strip()
-                buf = [line]
-            else:
-                buf.append(line)
-        flush()
-
-        # 全文无标题时，整体作为一段
-        if not sections and text.strip():
-            sections.append({"heading": "", "body": text.strip()})
-        return sections
+        return list(cls._iter_chunk_records(io.StringIO(text)))
 
     # ------------------------------------------------------------------ #
     # 统计信息

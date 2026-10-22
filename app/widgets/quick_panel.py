@@ -6,6 +6,9 @@
 - 数据来自 ServiceFacade.get_quick_panel；四维若服务未直接给出，
   则按好感度引擎的维度分组由 get_affection 的 18 维真实分数聚合，保证有数可看
 - 深色 indigo 主题
+
+本模块是维度分层中的**观测层**（UI 好感度四维：信任/吸引/情感/承诺），
+本层维度命名空间见 services/person_state_snapshot.py 的 DimensionLayerRegistry。
 """
 
 from __future__ import annotations

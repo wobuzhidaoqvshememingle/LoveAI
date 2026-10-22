@@ -9,6 +9,35 @@
 > 处理方式：**下方条目正文与日期保持原样、不回溯改写**（遵循上一条原则），仅在标题后补注真实语义。
 > 今后规则：发版一律走 SemVer（3.0.0 之后是 3.0.1 / 3.1.0…）；需求批次只用 R3.x 前缀登记在 `docs/功能需求文档.md`，**不再进入本文件标题**。
 
+## [3.2.0] - 2026-10-22 跨学科机制卡落地（预测闭环 + 六轴引擎复活 + 维度分层注册）
+
+> 基线 v3.1.0-r3387。本轮按 18 张跨学科机制卡最小落地形态补算法，不推翻主体。
+> 借卡：M1-1/M1-2（HRV 滑动窗口 + CCI 探针加权）、M2-1/M2-2（EnKF 集合同化 + 做市商库存偏移）、M3-1/M3-2（天文分层星表 + OS 分层）、M4-1/M4-3（QR RS 容错 + 胶卷冷备份）、M5-3（形态发生素 Blackboard）。
+
+### 新增
+- **P0-1 预测-反馈闭环接线**：新建 `services/prediction_loop.py`（PredictionLoop 状态机 PREDICTING→AWAITING_REACTION→OBSERVING→ASSIMILATING + ReactionInventory 最近 10 条反应 EMA α=0.2）；`app/service_facade.py:1352` 编排器实例化时注入真实 `digital_twin` 实例（修复前 UI 看到的 confidence=0.5 是 facade 常量回填）。`assimilate()` 只更新 snapshot 先验，不改 twin prompt。
+- **P0-2 维度分层注册表**：`services/person_state_snapshot.py` 顶部新增 `DimensionLayerRegistry`（观测层 UI 四维 / 状态层 snapshot 六轴 / 评估层 six_dim_strategy 六维战略分 / 诊断层 strategy_advisor 六维人格），不改任何现有维度名；4 个 owner 模块 docstring 各加一行命名空间引用。
+- **P0-3 关系六轴计算引擎复活**：新建 `services/relationship_axes.py`（保留死代码 AXES/_DIM_TO_AXIS/_WEIGHTS/score_axes 兼容入口）；新增 `AXIS_PROBES` 表（6 轴 × 4 探针 = 24 个纯规则 detector_fn，不调 LLM）+ `SlidingWindowCalibrator`（window=20, EMA α=0.15, 置信区间随窗口方差伸缩，输出 value+confidence 二元组）；`person_state_snapshot.py:build_person_snapshot` 把 `relationship_axes` 从 None 占位改成真实 `score_axes_with_probes()` 调用。
+- **P1-1 配置文件冗余写**：新建 `services/redundant_config.py`（主 config.json + 备份 .redun + SHA256 校验和，原子写 tempfile+os.replace；主文件损坏自动从备份恢复并自愈回写）。本轮为双写+校验和占位，RS(255,223) 编码登记为未来增强（需 reedsolo 依赖）。
+- **P1-2 跨进程节点黑板**：新建 `services/node_blackboard.py`（SQLite 后端，`register_node`/`heartbeat`/`discover_nodes`/`lease_field`/`release_field`；lease 自动过期；内置 seed l1_onnx/l2_ollama/l3_cloud 三个虚拟节点演示）。
+
+### 修复
+- **P1-3 startup_probe list 当 dict bug**：`app/application.py:1059` 把 `report["items"]`（list[dict]）当 dict 调 `.items()` 抛 `'list' object has no attribute 'items'`，整个探针流程被 except 吞掉。加 isinstance list/dict 分支。
+- **BUG-005 桌宠 hello 版本号误报**：`desktop-pet-electron/electron/main.js:108` 原用 `app.getVersion()`，dev 模式返回 Electron 30.5.1 而非 package.json 的 3.1.0。改为硬编码 `fs.readFileSync('../package.json')` 读 version 字段。
+
+### 测试
+- `pytest tests/test_free_router_kernel.py`：**45 passed**（14.15s）。
+- `pytest tests/test_startup_probe.py`：**12 passed**（3.66s）。
+- 新增模块（prediction_loop / relationship_axes / redundant_config / node_blackboard）均 `py_compile` 通过并做最小烟雾测试（喂两条中文消息六轴从 50 中性微升至 51-52，符合预期；seed 三节点 lease 成功且 discover 可见）。
+
+### 未来方向（本轮未做，登记）
+- **M1-3 卡尔曼滤波融合探针观测**：LoveAI 无"对话→轴值"正演模型，高斯假设不成立，需粒子滤波/HMM，本轮不上。
+- **M4-1 RS(255,223) 编码**：本轮先双写+SHA256 占位，未引入 reedsolo 依赖。
+- **M2-3 二次雷达 IFF 受控探针**（twin 预测后以 20% 概率插中性消息做受控实验）：本轮不做。
+- **M6-1/M6-2/M6-3 多模型竞速**（Happy Eyeballs 错开并发 + FAC 质量校验）：本轮不做。
+
+---
+
 ## [未发布] - 2026-10-13 怀疑链 v2 落地（微积分加权 + 引导语义）+ 旧说谎检测证伪
 
 > 承接用户拍板：怀疑链从"验证/试探"转向"引导改变"，旧 deception_risk 高分结论经全量回放证伪为假阳性。
@@ -577,7 +606,7 @@
 - 自动降级链：L3→L2→L1→规则兜底；复杂度自动判断(问候短句→L1/日常→L2/复杂长文→L3)
 - LoRA适配器管理：list/select/get_current，支持 loveai-core/v2/v2-new/finetuned 四套切换
 - 训练数据收集：mark_good_reply→training_data表，get_training_stats，export_training_data导出JSONL
-- 模型文件从 D:\LoveAI\models 迁移：smollm2 ONNX+tokenizer、Qwen2.5 safetensors(953MB)、4套LoRA适配器
+- 模型文件从 <D盘>\LoveAI\models 迁移：smollm2 ONNX+tokenizer、Qwen2.5 safetensors(953MB)、4套LoRA适配器
 - Bridge新增5 Slot：get_model_status/list_lora_adapters/select_lora_adapter/mark_good_reply/get_training_stats
 - 兼容层：保留 _call_cloud/_call_local/local_loaded/local_available 别名，safety_filter等老调用方不受影响
 
@@ -628,7 +657,7 @@
 - 学科分布：general 15049/psychology 3441/biology 40/game_theory 18/economics 16/communication 16/sociology 14/law 13
 
 ### 五、其他
-- 删除初代版本（D:\LoveAI）开机自启快捷方式
+- 删除初代版本（<D盘>\LoveAI）开机自启快捷方式
 - 修复OCR单元测试用例（正确模拟OCR引擎不可用场景）
 - 全量单元测试通过
 

@@ -34,7 +34,7 @@
     话术题照抄指令（失败）。
   - 报告：data\benchmark_local_models.md、data\benchmark_local_quality.md。
 - **标签口径已统一**为 loveai-qwen15b（主力）/ loveai-qwen05b（兜底），
-  两 tag 已在本机 Ollama 物理注册（E:\JZDSTool\llm_models）。
+  两 tag 已在本机 Ollama 物理注册（<E盘>\JZDSTool\llm_models）。
 - **分工固化代码**：
   - services\local_model_manager.py（REGISTRY 幂等注册，绝不删模型；ChatML；num_ctx 8192）。
   - services\llm_gateway.py：默认主力 loveai-qwen15b、兜底 loveai-qwen05b；

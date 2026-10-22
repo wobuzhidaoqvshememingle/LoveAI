@@ -9,11 +9,25 @@
 
 const { app, BrowserWindow, screen, ipcMain, session } = require('electron');
 const path = require('path');
+const fs = require('fs');
 const settingsStore = require('./settings-store');
 const ipc = require('./ipc');
 const tray = require('./tray');
 const autoLaunch = require('./auto-launch');
 const dhManager = require('./dh-manager');
+
+// v3.2.0 (BUG-005 修复)：dev 模式下 app.getVersion() 会 fallback 到
+// Electron 自身版本（30.5.1）而非 package.json 的 3.1.0。改为硬编码读
+// package.json 的 version 字段。
+function readPetVersion() {
+  try {
+    const pkgPath = path.join(__dirname, '..', 'package.json');
+    const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf8'));
+    return String(pkg.version || '0.0.0');
+  } catch (e) {
+    try { return app.getVersion(); } catch (_) { return '0.0.0'; }
+  }
+}
 
 let mainWindow = null;
 
@@ -103,9 +117,9 @@ app.whenReady().then(() => {
   // 5. 开机启动（同步设置里的开关到系统）
   autoLaunch.syncFromSettings(settingsStore.get('system.autoLaunch'));
 
-  // 渲染进程同步查询版本号
+  // 渲染进程同步查询版本号（v3.2.0：读 package.json 而非 app.getVersion()）
   ipcMain.on('app:getVersion', (event) => {
-    event.returnValue = app.getVersion();
+    event.returnValue = readPetVersion();
   });
 
   // macOS：激活时若没有窗口则重建

@@ -20,14 +20,31 @@
 from __future__ import annotations
 
 import glob
+import hashlib
 import json
 import logging
 import os
+import re
 import sqlite3
 import tempfile
-from typing import Iterable, List, Dict, Optional, Sequence
+from typing import Iterable, List, Dict, Optional, Sequence, Tuple
 
 logger = logging.getLogger(__name__)
+
+# 4.x 消息分片表名：`Msg_<32 位 md5>`，每个表 = **一个会话**（表名是会话 wxid 的 md5）。
+# 实测（本机 52 个真实库）：713 个去重表名里 699 个能用 md5(contact/session 的 username) 还原出会话。
+_MSG_SHARD_RE = re.compile(r"(?i)^msg_([0-9a-f]{32})$")
+
+# 明确**不是**消息表的表名片段（4.x 库里混在 message_*.db 中的元数据 / FTS 影子表 / 资源表）。
+# 必须排除，否则会把 MessageResourceInfo / message_fts_v4_0_data 之类当成消息源。
+_NON_MESSAGE_NAME_HINTS = (
+    "fts", "resource", "name2id", "timestamp", "sqlite_sequence",
+    "delet", "compression", "group_time", "voiceinfo",
+)
+# 一张表要能当"消息表"，至少得有 时间 列 + (内容 或 类型) 列
+_TIME_COLS = ("createtime", "create_time", "createtime_ms")
+_CONTENT_COLS = ("strcontent", "content", "message_content", "msg")
+_TYPE_COLS = ("type", "local_type", "message_type", "msg_type")
 
 PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 STATE_FILE = os.path.join(PROJECT_ROOT, "data", "wechat_import_state.json")
@@ -98,11 +115,15 @@ class WeChatDBReader:
         """枚举所有消息分片库（4.x message_*.db；3.x MSG*.db）。"""
         if self.version == "4.x":
             # 4.x 实际路径：<wxid_dir>/db_storage/message/message_*.db
+            # 另外 biz_message_*.db 里也是同构的 `Msg_<md5>` 分片表（公众号/服务号消息；
+            # 本机实测 message 目录下 biz_message_0.db = 200 张分片表 / 2,784 行）。
+            # 不纳入的话，"交出条数"会永远比"全部消息表 count(*)"少这一份（实测差 2,784）。
             for sub in ("db_storage/message", "db_message"):
-                pattern = os.path.join(self.db_dir, sub, "message_*.db")
-                hits = sorted(glob.glob(pattern))
+                dirp = os.path.join(self.db_dir, sub)
+                hits = sorted(glob.glob(os.path.join(dirp, "message_*.db")))
+                hits += sorted(glob.glob(os.path.join(dirp, "biz_message_*.db")))
                 if hits:
-                    return hits
+                    return sorted(set(hits))
             return []
         else:
             pattern = os.path.join(self.db_dir, "Msg", "Multi", "MSG*.db")
@@ -138,18 +159,60 @@ class WeChatDBReader:
     # 表结构自适应
     # ------------------------------------------------------------------
     @staticmethod
-    def _detect_message_table(conn: sqlite3.Connection) -> Optional[str]:
-        rows = conn.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()
-        names = [r[0] for r in rows]
-        # 优先明确命名
-        for pref in ("Message", "message", "MSG", "msg"):
-            for n in names:
-                if n.lower() == pref.lower():
-                    return n
+    def _list_message_tables(conn: sqlite3.Connection,
+                             include_empty: bool = False) -> List[str]:
+        """列出库里**全部**真实消息表（4.x 是数十~数百张 Msg_<md5> 分片）。
+
+        修复说明（原先只探测"一张"表）：4.x 每个 `message_*.db` 里有 194~280 张
+        `Msg_<32位hex>` 分片表，每张对应一个会话；只取一张 → 只读到约 0.4% 的消息，
+        且会在 `message_resource.db` 上误选 `MessageResourceInfo`（非消息表）。
+        这里改为：按名字 + 列结构双重判定，返回**全部**消息表，按行数降序（大表优先）。
+        """
+        try:
+            rows = conn.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()
+        except Exception as e:  # noqa: BLE001
+            logger.debug("枚举表失败：%s", e)
+            return []
+        names = [r[0] for r in rows if r and r[0]]
+        out: List[Tuple[int, str]] = []
         for n in names:
-            if "message" in n.lower() or n.upper().startswith("MSG"):
-                return n
-        return None
+            nl = n.lower()
+            if any(h in nl for h in _NON_MESSAGE_NAME_HINTS):
+                continue
+            try:
+                cols = [r[1] for r in conn.execute('PRAGMA table_info("%s")' % n)]
+            except Exception:  # noqa: BLE001
+                continue
+            low = {c.lower() for c in cols}
+            has_time = bool(low & set(_TIME_COLS))
+            has_body = bool(low & set(_CONTENT_COLS)) or bool(low & set(_TYPE_COLS))
+            if not (has_time and has_body):
+                continue          # 结构不像消息表 → 不收（MessageResourceInfo 就死在这一步）
+            if _MSG_SHARD_RE.match(n):
+                kind = 0          # 4.x 分片表：最高优先
+            elif nl in ("message", "msgs", "msg", "message_table"):
+                kind = 1          # 3.x 常见整表
+            elif nl.startswith("msg") or "message" in nl:
+                kind = 2          # 其它疑似
+            else:
+                kind = 3
+            if kind == 3:
+                continue
+            try:
+                cnt = conn.execute('SELECT count(*) FROM "%s"' % n).fetchone()[0]
+            except Exception:  # noqa: BLE001
+                cnt = 0
+            if cnt == 0 and not include_empty:
+                continue
+            out.append((-cnt, kind, n))
+        out.sort()
+        return [t for _, _, t in out]
+
+    @staticmethod
+    def _detect_message_table(conn: sqlite3.Connection) -> Optional[str]:
+        """取一张"最像消息表"的表（兼容旧调用点；新代码请用 `_list_message_tables`）。"""
+        tabs = WeChatDBReader._list_message_tables(conn)
+        return tabs[0] if tabs else None
 
     def _column_map(self, conn: sqlite3.Connection, table: str) -> Dict[str, str]:
         """返回逻辑名 -> 实际列名 的映射（按大小写不敏感匹配）。"""
@@ -189,6 +252,16 @@ class WeChatDBReader:
             ts = ts // 1000
         talker = g("talker") or ""
         msg_type = g("type") or 0
+        # 4.x 的 `local_type` 会在高 32 位携带标志位：实测最多的取值是 21474836529
+        # （= 0x5_0000_0031，真实类型是低 32 位的 49 = app/文件/链接卡片）。
+        # 不掩掉的话整表都会落进 MSG_TYPE_NAMES 的 "other"，类型字段等于没解析。
+        # 掩码对 3.x 的小整数类型是无操作，不影响旧版本。
+        try:
+            msg_type = int(msg_type)
+        except Exception:  # noqa: BLE001
+            msg_type = 0
+        if msg_type < 0 or msg_type > 0xFFFFFFFF:
+            msg_type &= 0xFFFFFFFF
         sub_type = g("sub_type") or 0
         is_sender = g("is_sender") or 0
         if isinstance(is_sender, str):
@@ -232,6 +305,21 @@ class WeChatDBReader:
             logger.warning("未找到消息分片库：%s", self.db_dir)
             return
 
+        # 4.x：一张分片表 = 一个会话（表名 = md5(会话 wxid)）→ 先建 md5->wxid 索引，
+        # 用于给每条消息补上真实的 talker_id / display_name，以及让 contact_filter 真正生效。
+        talker_index: Dict[str, str] = {}
+        if self.version == "4.x":
+            try:
+                talker_index = self._build_talker_index()
+            except Exception as e:  # noqa: BLE001
+                logger.debug("构建会话 md5 索引失败（不影响全量读取）：%s", e)
+                talker_index = {}
+
+        filter_set = set(contact_filter) if contact_filter else None
+        if filter_set and not any(True for _ in filter_set):
+            filter_set = None
+        skipped_tables = 0
+
         for src in db_files:
             try:
                 plain = self._decrypt_to_work(src)
@@ -244,54 +332,200 @@ class WeChatDBReader:
                 logger.warning("打开明文库失败 %s：%s", plain, e)
                 continue
             try:
-                table = self._detect_message_table(conn)
-                if not table:
+                tables = self._list_message_tables(conn)
+                if not tables:
                     continue
-                cmap = self._column_map(conn, table)
-                if not cmap.get("create_time"):
-                    continue
-                # 构造 WHERE
-                where = []
-                params: list = []
-                if contact_filter and cmap.get("talker"):
-                    ph = ",".join("?" for _ in contact_filter)
-                    where.append(f'"{cmap["talker"]}" IN ({ph})')
-                    params.extend(contact_filter)
-                if start_time and cmap.get("create_time"):
-                    where.append(f'"{cmap["create_time"]}" >= ?')
-                    params.append(start_time)
-                if end_time and cmap.get("create_time"):
-                    where.append(f'"{cmap["create_time"]}" <= ?')
-                    params.append(end_time)
-                where_sql = (" WHERE " + " AND ".join(where)) if where else ""
-                # 按 create_time 游标分页
-                last_ts = start_time or 0
-                while True:
-                    sql = (f'SELECT * FROM "{table}"{where_sql} '
-                           f'AND "{cmap["create_time"]}" > ? '
-                           f'ORDER BY "{cmap["create_time"]}" ASC LIMIT ?')
-                    qparams = params + [last_ts, batch_size]
-                    try:
-                        rows = conn.execute(sql, qparams).fetchall()
-                    except Exception:
-                        # 退化：不带分页直接一次拉
-                        sql2 = (f'SELECT * FROM "{table}"{where_sql} '
-                                f'ORDER BY "{cmap["create_time"]}" ASC LIMIT ?')
-                        rows = conn.execute(sql2, params + [batch_size * 5]).fetchall()
-                    if not rows:
-                        break
-                    for row in rows:
-                        normalized = self._normalize(row, cmap)
-                        last_ts = max(last_ts, normalized["create_time"])
-                        yield normalized
-                    if len(rows) < batch_size:
-                        break
+                for table in tables:
+                    cmap = self._column_map(conn, table)
+                    if not cmap.get("create_time"):
+                        continue
+                    # 4.x：用表名还原这张表属于哪个会话
+                    table_talker: Optional[str] = None
+                    if self.version == "4.x":
+                        m = _MSG_SHARD_RE.match(table)
+                        if m:
+                            table_talker = talker_index.get(m.group(1).lower())
+
+                    # ---- WHERE 构造：永远不能拼出 "FROM t AND ..." 这种非法 SQL ----
+                    where: List[str] = []
+                    params: List[object] = []
+                    if self.version != "4.x":
+                        # 3.x 有真实 talker 列，可在 SQL 里过滤
+                        if filter_set and cmap.get("talker"):
+                            ph = ",".join("?" for _ in filter_set)
+                            where.append(f'"{cmap["talker"]}" IN ({ph})')
+                            params.extend(sorted(filter_set))
+                        elif filter_set:
+                            skipped_tables += 1
+                            continue
+                    if start_time is not None:
+                        where.append(f'"{cmap["create_time"]}" >= ?')
+                        params.append(start_time)
+                    if end_time is not None:
+                        where.append(f'"{cmap["create_time"]}" <= ?')
+                        params.append(end_time)
+                    filter_sql = (" AND " + " AND ".join(where)) if where else ""
+
+                    # 4.x 的过滤在表级完成（一张表=一个会话）
+                    if self.version == "4.x" and filter_set:
+                        if not table_talker or table_talker not in filter_set:
+                            skipped_tables += 1
+                            continue
+
+                    ct = cmap["create_time"]
+                    # ---- 复合游标 (create_time, rowid)：保证"恰好一次"遍历 ----
+                    # 原实现只用 `create_time > ?`，同一秒的多条会被跨页跳过；
+                    # 且无过滤时 SQL 语法错 → 兜底语句不带游标 → 无限重放。
+                    cursor_ts = start_time if start_time is not None else -1
+                    cursor_rid = -1
+                    while True:
+                        sql = (
+                            f'SELECT *, rowid AS __rid FROM "{table}" '
+                            f'WHERE ("{ct}" > ? OR ("{ct}" = ? AND rowid > ?)){filter_sql} '
+                            f'ORDER BY "{ct}" ASC, rowid ASC LIMIT ?'
+                        )
+                        qparams = [cursor_ts, cursor_ts, cursor_rid] + params + [batch_size]
+                        try:
+                            rows = conn.execute(sql, qparams).fetchall()
+                        except Exception:  # noqa: BLE001
+                            # 退路：万一该表不支持 rowid（WITHOUT ROWID），只用时间游标。
+                            # 注意：**仍然带游标**，绝不回到"无游标兜底"（那会无限重放）。
+                            sql2 = (f'SELECT * FROM "{table}" '
+                                    f'WHERE "{ct}" > ?{filter_sql} '
+                                    f'ORDER BY "{ct}" ASC LIMIT ?')
+                            try:
+                                rows = conn.execute(
+                                    sql2, [cursor_ts] + params + [batch_size]).fetchall()
+                            except Exception as e2:  # noqa: BLE001
+                                logger.warning("读取表 %s 失败：%s", table, e2)
+                                break
+                        if not rows:
+                            break
+                        for row in rows:
+                            normalized = self._normalize(row, cmap)
+                            # 游标必须用**原始列值**（_normalize 会把毫秒除以 1000）
+                            try:
+                                raw_ts = row[ct]
+                            except Exception:  # noqa: BLE001
+                                raw_ts = normalized["create_time"]
+                            if raw_ts is None:
+                                raw_ts = cursor_ts
+                            try:
+                                rid = row["__rid"]
+                            except Exception:  # noqa: BLE001
+                                rid = cursor_rid + 1
+                            cursor_ts, cursor_rid = raw_ts, rid
+                            if table_talker:
+                                normalized["talker_id"] = table_talker
+                                normalized["display_name"] = self._contacts.get(
+                                    table_talker, table_talker)
+                            yield normalized
+                        if len(rows) < batch_size:
+                            break
             finally:
                 conn.close()
+        if skipped_tables:
+            logger.debug("contact_filter 生效：跳过无法归属到目标会话的表 %d 张", skipped_tables)
 
     # ------------------------------------------------------------------
     # 联系人 / 会话
     # ------------------------------------------------------------------
+    def _build_talker_index(self) -> Dict[str, str]:
+        """建 `md5(会话 wxid) -> wxid` 索引（4.x 分片表名就是这个 md5）。
+
+        数据来源（三处并集）：contact 库 + session 库的 username 列 + 各消息库
+        `Name2Id.user_name`（后者能补上已退群/已删好友的残留会话）。
+        实测覆盖率（本机真实库）：仅前两源时 713 个去重分片表名命中 699 个（97.9%）；
+        加上 `Name2Id` 后，按行数计的空 talker 从 178,609 条降到约 1.4 千条。
+        仍未命中的表按"会话未知"处理：talker_id 留空；带 contact_filter 时跳过该表
+        （宁可少给，也不把不属于目标会话的消息混进去）。
+        """
+        cands = set()
+        try:
+            cands.update(self.get_contacts_map().keys())
+        except Exception as e:  # noqa: BLE001
+            logger.debug("取联系人失败：%s", e)
+        try:
+            cands.update(self._all_session_talkers())
+        except Exception as e:  # noqa: BLE001
+            logger.debug("取会话标识失败：%s", e)
+        try:
+            cands.update(self._message_db_talkers())
+        except Exception as e:  # noqa: BLE001
+            logger.debug("取消息库 Name2Id 失败：%s", e)
+        idx: Dict[str, str] = {}
+        for c in cands:
+            if not c:
+                continue
+            idx[hashlib.md5(c.encode("utf-8")).hexdigest().lower()] = c
+        return idx
+
+    def _message_db_talkers(self) -> List[str]:
+        """从各消息库的 `Name2Id` 表取会话标识（列 `user_name`）。
+
+        为什么需要它：contact / session 库并不含全部会话。实测本机 18 张未还原的分片表里，
+        有 4 张（合计 ≈177,158 行，含一个 159,816 行的大群）只能从消息库自带的
+        `Name2Id.user_name` 里找到 wxid（已退群/已删好友的会话残留）。补上这一源之后，
+        空 `talker_id` 从 178,609 条降到约 1.4 千条（见 evidence_51/52）。
+        代价：需要把消息库解密出来才能读它；而 `read_messages` 本来也要解密同一批库
+        （解密结果会缓存复用），所以总解密量不变。
+        """
+        out: List[str] = []
+        for src in self._list_message_dbs():
+            try:
+                plain = self._decrypt_to_work(src)
+            except Exception as e:  # noqa: BLE001
+                logger.debug("Name2Id 预扫：解密 %s 失败：%s", src, e)
+                continue
+            try:
+                conn = self._connect_plain(plain)
+            except Exception:  # noqa: BLE001
+                continue
+            try:
+                try:
+                    rows = conn.execute('SELECT user_name FROM "Name2Id"').fetchall()
+                except Exception:  # noqa: BLE001
+                    continue          # 该库没有 Name2Id（media_0 / message_fts 等）
+                for r in rows:
+                    if r[0]:
+                        out.append(str(r[0]))
+            finally:
+                conn.close()
+        return out
+
+    def _all_session_talkers(self) -> List[str]:
+        """session 库里的**全部**会话标识（`get_session_list` 只取 200 条，不够做索引）。"""
+        sdb = self._find_session_db()
+        if not sdb or not os.path.exists(sdb):
+            return []
+        out: List[str] = []
+        try:
+            plain = self._decrypt_to_work(sdb)
+            conn = self._connect_plain(plain)
+            try:
+                tables = [r[0] for r in conn.execute(
+                    "SELECT name FROM sqlite_master WHERE type='table'").fetchall()]
+                for t in tables:
+                    if "session" not in t.lower():
+                        continue
+                    cols = [r[1] for r in conn.execute(
+                        f'PRAGMA table_info("{t}")').fetchall()]
+                    low = {c.lower(): c for c in cols}
+                    col = low.get("username") or low.get("talker") or low.get("usrname")
+                    if not col:
+                        continue
+                    try:
+                        for row in conn.execute(f'SELECT "{col}" FROM "{t}"'):
+                            if row[0]:
+                                out.append(str(row[0]))
+                    except Exception:  # noqa: BLE001
+                        continue
+            finally:
+                conn.close()
+        except Exception as e:  # noqa: BLE001
+            logger.debug("读取会话标识失败 %s：%s", sdb, e)
+        return out
+
     def get_contacts_map(self) -> Dict[str, str]:
         """返回 {wxid: 昵称}。"""
         cdb = self._find_contact_db()

@@ -22,7 +22,7 @@
 > 全部在 PowerShell 下执行。`$py` 为系统 Python 3.13.13。
 
 ```powershell
-$py = "C:\Users\87433\AppData\Local\Doubao\User Data\sandbox_runtime\bases\d0ace100fdff5b2d247847aca1e3d83b\python\python.exe"
+$py = "%USERPROFILE%\AppData\Local\Doubao\User Data\sandbox_runtime\bases\d0ace100fdff5b2d247847aca1e3d83b\python\python.exe"
 $venv = "<PROJECT_ROOT>\.venv-liveportrait"
 
 # 1) 建 venv

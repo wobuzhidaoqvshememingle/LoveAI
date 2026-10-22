@@ -428,6 +428,32 @@ def pick_scripts(scene: str, k: int = 3, style: Optional[str] = None,
 # 称呼替换：模板里的占位称呼 → context 里对方/我方的具体称呼
 _NAME_SLOTS = ("你", "我", "宝贝", "亲爱的", "宝宝", "darling", "对方")
 
+# --------------------------------------------------------------------------- #
+# 话题守卫：只有 last_topic 确实像"名词短语"时才拼尾句
+# --------------------------------------------------------------------------- #
+# 背景（实测第一因）：auto_strategy_pipeline._build_refine_context 把对方最近
+# 一条消息的【整句原文】截 20 字当作 last_topic 传进来，下游却按名词短语使用，
+# 拼出「…。对了，你今天怎么都不找我，是不是不在乎我了那事后来呢？」这类语法
+# 破碎、与上文语义重复的尾句。抽不到合格话题时，宁可不拼。
+_TOPIC_MAX_LEN = 12
+_TOPIC_PUNCT = "，。！？；：、,.!?;:"
+_TOPIC_MARKERS = ("是不是", "怎么", "为什么", "什么", "吗", "呢")
+
+
+def _is_topic_phrase(text: str) -> bool:
+    """text 是否像可安全嵌入「{topic}那事」的名词性话题。
+
+    整句原话（含标点/疑问词或过长）一律判否 ⇒ 调用方跳过拼尾句。
+    """
+    t = (text or "").strip()
+    if not t or len(t) > _TOPIC_MAX_LEN:
+        return False
+    if any(ch in _TOPIC_PUNCT for ch in t):
+        return False
+    if any(w in t for w in _TOPIC_MARKERS):
+        return False
+    return True
+
 
 def refine_script(template: str, context: Optional[dict] = None) -> str:
     """根据当前聊天上下文微调一条话术。
@@ -457,9 +483,9 @@ def refine_script(template: str, context: Optional[dict] = None) -> str:
         if nick not in out:
             out = out.rstrip("。！!?？") + f"，{nick}。"
 
-    # 2) 织入上一次提到的细节
+    # 2) 织入上一次提到的细节（仅当 last_topic 是合格的名词性话题时才拼）
     topic = (ctx.get("last_topic") or "").strip()
-    if topic and topic not in out:
+    if topic and _is_topic_phrase(topic) and topic not in out:
         # 简短地把对方之前提过的事接进来
         tail = {
             "开心": f"对了，{topic}后来怎么样了？",

@@ -11,15 +11,20 @@ from .base import Message
 logger = logging.getLogger(__name__)
 
 
-def is_revokemsg(content: str) -> bool:
+def is_revokemsg(content: Union[str, bytes]) -> bool:
     """判断一条消息是否为微信撤回系统通知。
 
     口径（P1）：仅当 content 内含 <sysmsg type="revokemsg"> 标记时判为撤回。
     纯文本"你撤回了一条消息"等系统提示不在此列（它们是通知回显，不含 revokemsg XML），
     与正式库已标记的 2 条撤回（wechat_msg_id=7983/10742）口径一致。
+
+    content 可能是 str，也可能是原始 bytes（非文本消息体）；两种形态都按同一
+    "大小为写不敏感的 substring 命中"口径判定，不改变既有语义。
     """
     if not content:
         return False
+    if isinstance(content, (bytes, bytearray)):
+        return b"revokemsg" in bytes(content).lower()
     return "revokemsg" in content.lower()
 
 

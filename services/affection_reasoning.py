@@ -451,6 +451,85 @@ class AffectionReasoner:
             "evidence": rep["evidence"],
         }
 
+    # ------------------------------------------------------------------ #
+    # 交叉验证：姿态/语境推断  vs  词典法确定性调制
+    # ------------------------------------------------------------------ #
+    def cross_check(self, message: str,
+                    emotion: Optional[dict] = None) -> dict:
+        """把本引擎的结论与 relation_metrics 的确定性结论对拍。
+
+        分工：
+          · 本引擎：关键词 → 关系姿态 → 语境消解 → 内心状态。
+            强项是**语境**（傲娇 / 反话 / 违抗 / 敷衍），弱项是**词级调制**——
+            对 "我不太开心""不是很喜欢" 这类"否定 + 程度"结构，
+            label 仍会取到正向情感词。
+          · relation_metrics：称谓分级 + 情感词 ±1 + 程度副词几何平均 + 否定取反。
+            纯算术、可逐步手算，强项正是上面那个弱项。
+        两者一致 → 提高置信；不一致 → 标记 need_review，交人工或上层裁决。
+        本方法**只读**，不改变任何 delta 计算路径。
+
+        Returns:
+            含 posture_polarity / lexicon_polarity / agree / need_review /
+            ps / negations / degree / appellation / note 的字典。
+        """
+        msg = {"content": message or "", "direction": "received"}
+        rep = self.build_report([msg], emotion, {})
+        dims = rep.get("dimensions") or {}
+        pos = sum(v for v in dims.values() if v > 0.2)
+        neg = sum(-v for v in dims.values() if v < -0.2)
+        if pos > neg and pos > 0:
+            posture_pol = "positive"
+        elif neg > pos and neg > 0:
+            posture_pol = "negative"
+        else:
+            posture_pol = "neutral"
+
+        out: dict[str, Any] = {
+            "posture_polarity": posture_pol,
+            "lexicon_polarity": None,
+            "agree": None,
+            "need_review": False,
+            "ps": None,
+            "negations": 0,
+            "degree": 1.0,
+            "appellation": 0.0,
+            "note": "",
+        }
+
+        try:
+            # 延迟导入 + 容错：relation_metrics 缺失时本引擎照常工作
+            from services.relation_metrics import message_sentiment
+            lex = message_sentiment(message or "")
+        except Exception as exc:  # noqa: BLE001
+            out["note"] = "relation_metrics 不可用，跳过词典法对拍：%s" % exc
+            return out
+
+        clause = (lex.get("clauses") or [{}])[0]
+        out.update({
+            "lexicon_polarity": lex["polarity"],
+            "ps": lex["ps"],
+            "negations": clause.get("negations", 0),
+            "degree": clause.get("degree_applied", 1.0),
+            "appellation": lex.get("max_appellation", 0.0),
+        })
+
+        # 双侧均中性 → 无信号，不算分歧
+        if posture_pol == "neutral" and lex["polarity"] == "neutral":
+            out["agree"] = True
+            out["note"] = "双侧中性，无信号"
+            return out
+
+        out["agree"] = (posture_pol == lex["polarity"])
+        if not out["agree"]:
+            out["need_review"] = True
+            out["note"] = (
+                "两法极性相反：姿态推断=%s，词典法=%s"
+                "（否定%d次／程度%.4f／称谓%.1f）。建议人工复核。"
+                % (posture_pol, lex["polarity"], out["negations"],
+                   out["degree"], out["appellation"])
+            )
+        return out
+
 
 __all__ = ["AffectionReasoner", "InnerDelta",
            "POSTURE_INTIMACY_DECLARE", "POSTURE_INVESTMENT_CARE",

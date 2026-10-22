@@ -466,7 +466,9 @@ async function loadCharacterConfig() {
     if (!resp.ok) throw new Error('http ' + resp.status);
     const all = await resp.json();
     // 优先用 settings 里指定的角色
-    const curId = (settings && settings.currentCharacter) || all.current || (all.characters && all.characters[0].id);
+    // 键名对齐：设置面板与默认值写入的是 pet.currentModel，读取必须用同一键
+    // （原实现只读顶层 currentCharacter，永远取不到 → 一直回落 all.current 的静图）
+    const curId = (settings && (settings.currentCharacter || (settings.pet && settings.pet.currentModel))) || all.current || (all.characters && all.characters[0].id);
     const found = (all.characters || []).find(c => c.id === curId) || all.characters[0];
     return found;
   } catch (e) {

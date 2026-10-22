@@ -69,9 +69,22 @@ class TestFreeRouter(unittest.TestCase):
         self.assertTrue(any(m.endswith(":free") for _, m in provs))
 
     def test_nvidia_candidates(self):
+        # R3.7 行为变更：NVIDIA /v1/models 不返回 pricing → 拿不到任何免费证据 →
+        # **默认拒绝**（改前是「证据不足则放行」）。登记白名单后同一份配置即可放行，
+        # 证明渠道接线本身没变，变的只是价格门口径。
+        blocked = FreeModelRouter({"llm.free.nvidia_key": "nvapi-x",
+                                   "llm.free.include_ollama": "false",
+                                   "llm.free.auto_catalog": "false",
+                                   "llm.free.zero_config.enabled": "false",
+                                   "llm.free.auto_discover_bridge": "false",
+                                   "llm.free.local_scan.enabled": "false",
+                                   "llm.free.desktop_ai.enabled": "false"})
+        self.assertFalse(any(c.provider == "nvidia" for c in blocked.candidates()))
+
         r = FreeModelRouter({"llm.free.nvidia_key": "nvapi-x",
                              "llm.free.include_ollama": "false",
-                             "llm.free.auto_catalog": "false"})
+                             "llm.free.auto_catalog": "false",
+                             "llm.free.trusted_models": "nvidia:*"})
         self.assertTrue(any(c.provider == "nvidia" for c in r.candidates()))
 
     def test_ollama_default_first(self):
@@ -103,10 +116,20 @@ class TestFreeRouter(unittest.TestCase):
         self.assertIn("success_rate", rep[0])
 
     def test_custom_loopback_endpoint(self):
+        # R3.7 行为变更：任意 OpenAI 兼容端点（哪怕地址是回环）没有公开价目表 →
+        # 拿不到免费证据 → **默认拒绝**；登记白名单后才进池，且优先级仍最高。
+        blocked = FreeModelRouter({"llm.free.custom_base": "http://127.0.0.1:8767/v1",
+                                   "llm.free.custom_model": "workbuddy/glm-5.3",
+                                   "llm.free.include_ollama": "false",
+                                   "llm.free.auto_catalog": "false",
+                                   "llm.free.zero_config.enabled": "false"})
+        self.assertEqual(blocked.candidates(), [])
+
         r = FreeModelRouter({"llm.free.custom_base": "http://127.0.0.1:8767/v1",
                              "llm.free.custom_model": "workbuddy/glm-5.3",
                              "llm.free.include_ollama": "false",
-                             "llm.free.auto_catalog": "false"})
+                             "llm.free.auto_catalog": "false",
+                             "llm.free.trusted_models": "custom:workbuddy/glm-5.3"})
         cands = r.candidates()
         self.assertTrue(any(c.provider == "custom" for c in cands))
         self.assertEqual(r.ranked()[0].provider, "custom")
@@ -179,15 +202,24 @@ class TestDynamicCatalog(unittest.TestCase):
         self.assertEqual(calls.count(OPENROUTER_MODELS_URL), 3)
 
     def test_nvidia_key_dynamic(self):
+        # R3.7 行为变更：NIM 动态目录照旧拉到（catalog 可见），但它的响应不含 pricing
+        # → 拿不到免费证据 → 默认拒绝；把该 id 登记进白名单后才进池。
         http, calls = make_http({NVIDIA_MODELS_URL: NVIDIA_BODY,
                                  OPENROUTER_MODELS_URL: TimeoutError()})
         cfg = {"llm.free.nvidia_key": "nvapi-x",
                "llm.free.include_ollama": "false",
                "llm.free.nvidia_catalog_md": "false"}
         r = FreeModelRouter(cfg, http_get=http)
-        models = [c.model for c in r.candidates() if c.provider == "nvidia"]
-        self.assertEqual(models, ["vendor/dyn-nim"])
+        self.assertEqual([c.model for c in r.candidates()
+                          if c.provider == "nvidia"], [])
+        self.assertEqual(r.catalog_status()["nvidia"]["count"], 1)
         self.assertIn(NVIDIA_MODELS_URL, calls)
+
+        cfg2 = dict(cfg)
+        cfg2["llm.free.trusted_models"] = "nvidia:vendor/dyn-nim"
+        r2 = FreeModelRouter(cfg2, http_get=http)
+        self.assertEqual([c.model for c in r2.candidates()
+                          if c.provider == "nvidia"], ["vendor/dyn-nim"])
 
     def test_nvidia_no_key_catalog_md(self):
         http, calls = make_http({NVIDIA_CATALOG_MD_URL: NVIDIA_MD,

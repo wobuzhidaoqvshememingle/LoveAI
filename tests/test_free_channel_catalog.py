@@ -57,10 +57,32 @@ class TestFreeChannelCatalog(unittest.TestCase):
         self.assertIn("openrouter_free", ids)
         self.assertIn("nvidia_nim", ids)
 
-    def test_hf_ssh_marked_unreachable(self) -> None:
+    def test_hf_ssh_endpoint_answers_but_channel_disabled(self) -> None:
+        """2026-10-17 r2 复核推翻原断言：chat.hf.co:22 有 SSHD 应答
+        （Permission denied (publickey,keyboard-interactive)，即需凭据、非网络不通），
+        故 reachable 为 True；但本项目 hf_ssh_channel 仍是 disabled 占位，priority 保持 99。"""
         hf = next(c for c in FREE_CHANNEL_CATALOG if c["id"] == "hf_ssh")
-        self.assertFalse(hf["reachable"])
+        self.assertTrue(hf["reachable"])
         self.assertEqual(hf["priority"], 99)
+        self.assertIn("disabled", hf["note"])
+        self.assertIn("Permission denied", hf["note"])
+
+    def test_http_responded_channels_are_reachable(self) -> None:
+        """r2 口径：拿到了服务端/边缘 HTTP 响应（含 401/403/405）= reachable True，
+        「匿名被拒」不得写成「本机网络不通」。"""
+        for cid in ("groq", "cerebras", "cohere", "github_models",
+                    "cloudflare_workers_ai", "sambanova", "zhipu"):
+            c = next(x for x in FREE_CHANNEL_CATALOG if x["id"] == cid)
+            self.assertIs(True, c["reachable"], f"{cid} 拿到了 HTTP 应答，应为 True")
+
+    def test_reachable_false_only_when_no_http_response(self) -> None:
+        """r2 口径：False 只允许出现在「拿不到任何 HTTP 响应」的通道上
+        （连接超时 / DNS 失败 / 连接被拒）。"""
+        for cid in ("google_gemini", "mistral", "huggingface"):
+            c = next(x for x in FREE_CHANNEL_CATALOG if x["id"] == cid)
+            self.assertIs(False, c["reachable"])
+            self.assertIn("(28)", c["probe"])   # curl 连接超时
+            self.assertIsNone(c["latency_ms"])  # 无应答 => 无延迟可记
 
     def test_as_dict_summary_consistent(self) -> None:
         d = as_dict()

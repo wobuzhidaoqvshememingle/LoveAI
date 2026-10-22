@@ -22,7 +22,7 @@
 关键产物路径：
   - docs\功能需求文档.md（R3.3-01~43）
   - docs\外部项目深度调研报告-20261009.md
-  - E:\LoveAI_build\installer\LoveAI_Setup_v2.0.0.exe
+  - <E盘>\LoveAI_build\installer\LoveAI_Setup_v2.0.0.exe
   - data\iso_summary.log（全绿证据）
 遇到的问题：
   - Tencent 4.1GB 差1个文件被进程锁，重启后可再迁 F 盘

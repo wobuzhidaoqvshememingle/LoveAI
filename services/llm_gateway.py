@@ -224,6 +224,8 @@ class LLMGateway:
         max_tokens: int = 2000,
         allow_rule_fallback: bool = True,
         tier: Optional[str] = None,
+        messages: Optional[list] = None,
+        multi_turn: Optional[bool] = None,
     ) -> str:
         """
         统一聊天接口，按复杂度自动路由到对应层级，并按降级链逐层兜底。
@@ -240,6 +242,21 @@ class LLMGateway:
             tier: R3.3-04 四层分工，可选 judgment/draft/polish/simulate。
                 一旦指定，忽略 complexity 的层链推导，直接用该 tier 的降级链。
                 不改变任何老调用方行为（默认 None）。
+            messages: R3.5 可选：OpenAI 风格完整消息列表（含 assistant 历史）。
+                **只透传给 free 免费层的 Sticky Session**，用来算出「同一条多轮
+                对话」的会话指纹，避免中途换模型导致上下文格式不兼容；l1/l2/l3
+                仍是单轮接口，不透传。默认 None = 完全不产生任何行为差异。
+            multi_turn: R3.5 可选：显式声明本轮是否属于多轮对话（消息列表里没有
+                assistant 历史、但调用方自己知道是多轮时用这个）。默认 None =
+                由 messages 里是否含 assistant 历史自动判断。同样只影响 free 层。
+
+        **现状说明（务必知晓）**：``messages`` / ``multi_turn`` 目前
+        **没有任何产品调用方传入** —— 上层 `app/service_facade.py` 依然是
+        「system_prompt + user_prompt」两段字符串的单轮调用方式，所以
+        free 层的 Sticky Session 只有在调用方开始传历史（或 ``multi_turn=True``）
+        之后才真正生效，在那之前 ``routing_snapshot()['sticky_sessions']`` 保持 0。
+        本参数是为「调用方逐步改成携带历史」预留的透传通道，加了它不会改变
+        任何既有调用方的输出（全部走默认 None）。
 
         Returns:
             模型输出文本；所有模型层均不可用时，allow_rule_fallback=True 返回
@@ -286,7 +303,8 @@ class LLMGateway:
         for layer in chain:
             try:
                 out = self._call_layer(layer, system_prompt, user_prompt,
-                                       temperature, max_tokens)
+                                       temperature, max_tokens,
+                                       messages=messages, multi_turn=multi_turn)
                 if out and out.strip():
                     self.last_layer = layer
                     self.last_call_time = time.time()
@@ -294,7 +312,8 @@ class LLMGateway:
             except Exception as e:
                 # R3.3-30 fault_router 分级：P0 同层重试一次 / P1 降级 / P2 记日志+信号
                 recovered = self._handle_layer_fault(
-                    layer, e, system_prompt, user_prompt, temperature, max_tokens)
+                    layer, e, system_prompt, user_prompt, temperature, max_tokens,
+                    messages=messages, multi_turn=multi_turn)
                 if recovered and recovered.strip():
                     # P0 同层重试自愈成功，直接返回
                     self.last_layer = layer
@@ -317,23 +336,37 @@ class LLMGateway:
     # R3.3-30 故障分级接线：按层调用 + P0/P1/P2 处理
     # ------------------------------------------------------------------ #
     def _call_layer(self, layer: str, system_prompt: str, user_prompt: str,
-                    temperature: float, max_tokens: int) -> str:
-        """按层名分发到具体调用（chat() 主循环与 P0 重试共用）。"""
+                    temperature: float, max_tokens: int,
+                    messages: Optional[list] = None,
+                    multi_turn: Optional[bool] = None) -> str:
+        """按层名分发到具体调用（chat() 主循环与 P0 重试共用）。
+
+        R3.5：``messages`` / ``multi_turn`` 只透传给 free 免费层（Sticky Session
+        需要它算会话指纹）；l1/l2/l3 仍是单轮接口，保持原样不受影响。
+        两者默认 None，既有调用方（含 P0 重试路径）行为逐字节不变。
+        """
         if layer == "l3":
             return self._call_l3(system_prompt, user_prompt, temperature, max_tokens)
         if layer == "free":
-            return self._call_free(system_prompt, user_prompt, temperature, max_tokens)
+            return self._call_free(system_prompt, user_prompt, temperature, max_tokens,
+                                   messages=messages, multi_turn=multi_turn)
         if layer == "l2":
             return self._call_l2(system_prompt, user_prompt, temperature, max_tokens)
         return self._call_l1(system_prompt, user_prompt, temperature, max_tokens)
 
     def _handle_layer_fault(self, layer: str, error: Exception,
                             system_prompt: str, user_prompt: str,
-                            temperature: float, max_tokens: int) -> Optional[str]:
+                            temperature: float, max_tokens: int,
+                            messages: Optional[list] = None,
+                            multi_turn: Optional[bool] = None) -> Optional[str]:
         """fault_router 分级处理：
           P0（timeout/5xx/连接重置）→ 同层立即重试一次，成功则返回恢复文本；
           P1（401/403/429/404/模型崩溃）→ 沿降级链切下一层（返回 None 让主循环继续）；
           P2（磁盘满/DB锁/连续P1）     → 记日志 + 发信号（不静默），返回 None。
+
+        R3.5：P0 同层重试时把 ``messages`` / ``multi_turn`` 原样带上，保证 free
+        层的 Sticky Session 在重试路径上与会话指纹一致（默认 None 时与改动前
+        完全等价，既有调用方零影响）。
         """
         try:
             from services.fault_router import classify_fault, FaultLevel
@@ -348,7 +381,8 @@ class LLMGateway:
             logger.warning("P0 瞬时故障 layer=%s，同层重试一次: %s", layer, error)
             try:
                 out = self._call_layer(layer, system_prompt, user_prompt,
-                                       temperature, max_tokens)
+                                       temperature, max_tokens,
+                                       messages=messages, multi_turn=multi_turn)
                 if out and out.strip():
                     logger.warning("P0 同层重试自愈成功 layer=%s", layer)
                     return out
@@ -509,11 +543,19 @@ class LLMGateway:
                 logger.warning("免费模型启动探活失败（忽略）: %s", e)
         return self._free_router
 
-    def _call_free(self, system_prompt, user_prompt, temperature, max_tokens) -> str:
-        """付费云端无 key 或失败时，走免费模型自动路由；无可用渠道抛出，由 chat() 继续降级。"""
+    def _call_free(self, system_prompt, user_prompt, temperature, max_tokens,
+                   messages: Optional[list] = None,
+                   multi_turn: Optional[bool] = None) -> str:
+        """付费云端无 key 或失败时，走免费模型自动路由；无可用渠道抛出，由 chat() 继续降级。
+
+        R3.5：把 ``messages`` / ``multi_turn`` 透传给 FreeModelRouter.chat()，
+        供 free 层 Sticky Session 计算会话指纹（仅多轮对话才建立/命中绑定，
+        且只「优先」不「强制」）。默认 None → 与改动前逐字节等价。
+        """
         router = self.get_free_router()
         out = router.chat(system_prompt, user_prompt,
-                          temperature=temperature, max_tokens=max_tokens)
+                          temperature=temperature, max_tokens=max_tokens,
+                          messages=messages, multi_turn=multi_turn)
         self.last_free_provider = out.get("provider")
         return out.get("text", "")
 
@@ -724,8 +766,13 @@ class LLMGateway:
                 kwargs: dict[str, Any] = dict(
                     model_path=gguf_path, n_ctx=4096, n_threads=4, verbose=False,
                 )
-                # 传 LoRA 适配器目录（若存在）
-                if os.path.isdir(adapter_path):
+                # 只传“确为 GGUF 适配器文件”的 LoRA：llama.cpp 的 lora_path 只接受 GGUF。
+                # 本工程 models_local/lora/<name> 是 PEFT/safetensors 目录（adapter_config.json +
+                # adapter_model.safetensors）。把目录交给 lora_path 会让加载阶段静默成功、首次
+                # decode 触发 access violation 打死整个进程（实测：传 lora_path 4/4 崩、不传 4/4
+                # 通过、连不存在的路径同样崩）。故收紧为“存在的 .gguf 文件”，目录/PEFT/非 gguf/
+                # 不存在一律不传（PEFT 适配器请走 transformers+peft 后端或先转 GGUF）。
+                if os.path.isfile(adapter_path) and adapter_path.lower().endswith(".gguf"):
                     kwargs["lora_path"] = adapter_path
                 self._l2_model = Llama(**kwargs)
                 self._l2_backend = "llama_cpp"

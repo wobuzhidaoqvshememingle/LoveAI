@@ -1,6 +1,10 @@
 """
 LoveAI v3.0 - 好感度引擎（游戏化重构版）
 
+本模块是维度分层中的**状态层** owner（snapshot 六轴：Trust/Attraction/Comfort/
+Investment/Respect/Emotional，计算引擎 services/relationship_axes.py），
+本层维度命名空间见 person_state_snapshot.py 的 DimensionLayerRegistry。
+
 v3.0 核心变化：
   1. 10 个分数区间（每区间 10 分），每个区间有明确的名称/含义/关系状态/
      解锁内容/对方典型表现/用户该做什么/区间风险。
@@ -44,27 +48,39 @@ class AffectionEngine:
     # ------------------------------------------------------------------ #
     # 18 维配置（v3.0：键集合与 v2 完全一致，权重仅微调 trust/security 权重，
     # 因为二者高度相关——security 本质是 trust 的外延——避免重复计分）
+    #
+    # R3.3-84 权重整数化（2026-10-16）：
+    #   · 数值由 0.02 / 0.11 / … 改为 2 / 11 / …，属**纯基数换算**（原值 ×100 取整），
+    #     比例一字未改，因此总分逐点完全一致；
+    #   · 权重和 = WEIGHT_SUM = 107，get_total 以实际求和归一化，
+    #     所以每个权重可**直接读作占比的分子**：trust=15 → 占总权 15/107 ≈ 14.0%；
+    #   · 改前用 0.02 这类十进制小数本身带浮点尾差（0.02 在二进制中无法精确表示），
+    #     整数基数的乘加更精确。
     # ------------------------------------------------------------------ #
     WEIGHTS: dict[str, float] = {
-        "physical_attraction": 0.02,   # 外在吸引力（边缘·激情/外貌）
-        "chat_resonance": 0.11,        # 聊天共鸣（核心·沟通）
-        "humor": 0.02,                 # 幽默感（边缘）
-        "thoughtfulness": 0.09,        # 体贴度（核心）
-        "trust": 0.15,                 # 信任感（核心·最高权重）
-        "respect": 0.06,               # 尊重感（次核心）
-        "common_interest": 0.03,       # 共同兴趣（边缘）
-        "emotional_value": 0.08,       # 情绪价值（核心）
-        "future_alignment": 0.11,      # 未来规划契合（核心·承诺）
-        "family": 0.02,                # 家庭关系（边缘）
-        "spending": 0.02,              # 消费观念（边缘）
-        "lifestyle": 0.02,            # 生活习惯（边缘）
-        "independence": 0.03,          # 独立性（边缘）
-        "security": 0.08,              # 安全感（核心·与 trust 重叠，v3.0 由 0.09→0.08）
-        "growth": 0.03,                # 共同成长（边缘）
-        "romance": 0.03,               # 浪漫感（边缘·激情）
-        "emotional_stability": 0.06,   # 情绪稳定（次核心）
-        "intimacy": 0.11,              # 亲密感（核心）
+        "physical_attraction": 2,      # 外在吸引力（边缘·激情/外貌）
+        "chat_resonance": 11,          # 聊天共鸣（核心·沟通）
+        "humor": 2,                    # 幽默感（边缘）
+        "thoughtfulness": 9,           # 体贴度（核心）
+        "trust": 15,                   # 信任感（核心·最高权重）
+        "respect": 6,                  # 尊重感（次核心）
+        "common_interest": 3,          # 共同兴趣（边缘）
+        "emotional_value": 8,          # 情绪价值（核心）
+        "future_alignment": 11,        # 未来规划契合（核心·承诺）
+        "family": 2,                   # 家庭关系（边缘）
+        "spending": 2,                 # 消费观念（边缘）
+        "lifestyle": 2,                # 生活习惯（边缘）
+        "independence": 3,             # 独立性（边缘）
+        "security": 8,                 # 安全感（核心·与 trust 重叠，v3.0 由 0.09→0.08）
+        "growth": 3,                   # 共同成长（边缘）
+        "romance": 3,                  # 浪漫感（边缘·激情）
+        "emotional_stability": 6,      # 情绪稳定（次核心）
+        "intimacy": 11,                # 亲密感（核心）
     }
+
+    # 权重基数声明值（应恒等于 ΣWEIGHTS=107）。仅供启动自检比对；
+    # 归一化时用实际求和，避免"改了权重忘了改常量"造成口径漂移。
+    WEIGHT_SUM: float = 107.0
 
     # 关系长度加成（封顶 +8）：抵消长期稳定关系的自然衰减
     RELATION_BONUS_TIERS: list[tuple[int, float]] = [
@@ -116,6 +132,21 @@ class AffectionEngine:
     # 忠诚度日衰减比例（独立于好感 DECAY_RATIO=0.005；习惯比好感更顽固，
     # 因此回归速度刻意设得与好感不同——0.012/天，仅衰减 >50 的高忠诚度）。
     LOYALTY_DECAY_RATIO: float = 0.012
+
+    # ------------------------------------------------------------------ #
+    # R3.3-84 关系健康度（health）—— 第三条指标轨
+    #   语义 = 关系的**互动质量**，不是好感度本身。
+    #   依据：Gottman 正负互动比参照线（稳定 ≥5:1 / 高危 ≤1:1）+ 末日四骑士。
+    #   算法落在 services/relation_metrics.py（零 LLM、纯算术、可逐步手算）。
+    #   与 loyalty 一样**不进 WEIGHTS**（WEIGHTS 键集合是 v2 兼容硬约束）；
+    #   但对总分提供一个**有界偏移**，避免"关系已明显恶化、分数却还在涨"。
+    # ------------------------------------------------------------------ #
+    HEALTH_KEY: str = "health"
+    HEALTH_DEFAULT: float = 50.0                 # 无信号时的中性值 → 偏移 0，历史数据不受影响
+    HEALTH_MAX_OFFSET: float = 6.0               # 对总分的有界偏移上限（与关系长度加成同量级）
+    HEALTH_CONTEMPT_MAX_PENALTY: float = 20.0    # 蔑视是体系内最强单一负向预测因子 → 重罚
+    HEALTH_CRITICISM_MAX_PENALTY: float = 8.0    # 批评为其轻档
+    HEALTH_SCAN_LIMIT: int = 200                 # 重算健康度时回看的最近"对方消息"条数
 
     # 顺从/配合关键词（对方发来 = 对方听话/配合 → 忠诚上升）。
     _LOYALTY_COMPLY_KEYWORDS: tuple[str, ...] = (
@@ -330,9 +361,16 @@ class AffectionEngine:
             logger.warning("AffectionReasoner 初始化失败，R3.3-81 推理层未启用: %s", e)
         if set(self.WEIGHTS.keys()) != set(self.DIMENSION_NAMES.keys()):
             logger.warning("WEIGHTS 与 DIMENSION_NAMES 维度集合不一致")
+        _wsum_now = sum(self.WEIGHTS.values())
+        if abs(_wsum_now - self.WEIGHT_SUM) > 1e-9:
+            logger.warning(
+                "权重和(%s) 与声明的 WEIGHT_SUM(%s) 不一致——"
+                "若是有意调整权重比例，请同步更新 WEIGHT_SUM",
+                _wsum_now, self.WEIGHT_SUM,
+            )
         logger.info(
             "AffectionEngine v3.0 初始化 维度数=%d 权重和=%.3f 区间数=%d",
-            len(self.WEIGHTS), sum(self.WEIGHTS.values()), len(self.INTERVALS),
+            len(self.WEIGHTS), _wsum_now, len(self.INTERVALS),
         )
 
     # ------------------------------------------------------------------ #
@@ -403,7 +441,157 @@ class AffectionEngine:
     def get_total_with_bonus(self, person_id: str, scores: dict[str, float]) -> float:
         base = self.get_total(scores)
         bonus = self._get_relation_bonus(person_id)
-        return round(self._clamp_value(base + bonus), 1)
+        # R3.3-84：关系健康度对总分的有界偏移。
+        # 入参带 health 就用入参值；没带（历史重算路径）读库；库里也没有 → 50 → 偏移 0。
+        # 因此对历史数据与既有行为完全无影响。
+        health = scores.get(self.HEALTH_KEY)
+        if health is None:
+            health = self._read_stored_health(person_id)
+        return round(self._clamp_value(base + bonus + self.health_offset(health)), 1)
+
+    # ------------------------------------------------------------------ #
+    # R3.3-84 关系健康度（health）：Gottman 正负比 + 四骑士 → 总分有界偏移
+    # ------------------------------------------------------------------ #
+    @classmethod
+    def health_offset(cls, health: Optional[float]) -> float:
+        """健康度 → 总分偏移，线性有界到 ±HEALTH_MAX_OFFSET。
+
+        health=50 → 0；health=100 → +6；health=0 → −6。
+        无信号（None）时偏移为 0，保证既有行为不变。
+        """
+        if health is None:
+            return 0.0
+        h = max(0.0, min(100.0, float(health)))
+        return round((h - cls.HEALTH_DEFAULT) / 50.0 * cls.HEALTH_MAX_OFFSET, 4)
+
+    @classmethod
+    def compute_health(cls, positive: int, negative: int, neutral: int,
+                       contempt_hits: int = 0, criticism_hits: int = 0) -> dict:
+        """由正负互动计数算出关系健康度（0-100）。纯函数，可逐步复算。
+
+        ① 正负比映射（Gottman 参照线）：
+             无负向 → 100；ratio ≥ 5 → 100（稳定区）；
+             1 < ratio < 5 → 50 + (ratio−1)/4 × 50（过渡带线性爬升）；
+             ratio ≤ 1 → ratio × 50（跌破参照线后加速下滑，ratio=1 得 50，ratio=0 得 0）。
+        ② 蔑视惩罚：命中率 × 60，封顶 20（体系内最强单一负向预测因子）。
+        ③ 批评惩罚：命中率 × 24，封顶 8（轻档）。
+           防卫 / 冷战暂不计罚，避免词典级粗筛过拟合。
+        """
+        total = positive + negative + neutral
+        if total <= 0 or (positive == 0 and negative == 0):
+            return {
+                "health": cls.HEALTH_DEFAULT,
+                "ratio": None,
+                "gottman_zone": "no_signal",
+                "base": cls.HEALTH_DEFAULT,
+                "contempt_penalty": 0.0,
+                "criticism_penalty": 0.0,
+                "signal": total,
+            }
+
+        if negative == 0:
+            ratio_num: Optional[float] = None
+            base, zone = 100.0, "stable"
+        else:
+            ratio_num = positive / negative
+            if ratio_num >= 5.0:
+                base, zone = 100.0, "stable"
+            elif ratio_num > 1.0:
+                base, zone = 50.0 + (ratio_num - 1.0) / 4.0 * 50.0, "transition"
+            else:
+                base, zone = ratio_num * 50.0, "at_risk"
+
+        contempt_penalty = min(cls.HEALTH_CONTEMPT_MAX_PENALTY,
+                               contempt_hits / total * 60.0)
+        criticism_penalty = min(cls.HEALTH_CRITICISM_MAX_PENALTY,
+                                criticism_hits / total * 24.0)
+        health = max(0.0, min(100.0, base - contempt_penalty - criticism_penalty))
+        return {
+            "health": round(health, 2),
+            "ratio": (round(ratio_num, 4) if ratio_num is not None else None),
+            "gottman_zone": zone,
+            "base": round(base, 2),
+            "contempt_penalty": round(contempt_penalty, 2),
+            "criticism_penalty": round(criticism_penalty, 2),
+            "signal": total,
+        }
+
+    def _read_stored_health(self, person_id: str) -> float:
+        """从 scores_json 顶层读已存健康度；没有则返回中性默认值（偏移 0）。"""
+        try:
+            row = self.db.fetch_one(
+                "SELECT scores_json FROM current_affection WHERE person_id=:person_id",
+                {"person_id": person_id},
+            )
+            if not row or not row.get("scores_json"):
+                return self.HEALTH_DEFAULT
+            data = json.loads(row["scores_json"])
+            val = data.get(self.HEALTH_KEY)
+            return self.HEALTH_DEFAULT if val is None else float(val)
+        except Exception:
+            return self.HEALTH_DEFAULT
+
+    def _health_snapshot(self, person_id: str) -> dict:
+        """只读地给出当前健康度及其对总分的偏移（不落库）。"""
+        h = self._read_stored_health(person_id)
+        return {
+            "health": round(h, 2),
+            "offset": self.health_offset(h),
+            "has_data": abs(h - self.HEALTH_DEFAULT) > 1e-9,
+        }
+
+    def recompute_health(self, person_id: str,
+                         limit: Optional[int] = None) -> dict:
+        """回看最近 N 条"对方发来"的消息，重算关系健康度并落库。
+
+        零 LLM：只调 relation_metrics 的确定性词法计算。
+        relation_metrics 不可用时返回 no_signal，不影响任何既有流程。
+        """
+        n = int(limit or self.HEALTH_SCAN_LIMIT)
+        try:
+            rows = self.db.fetch_all(
+                "SELECT content FROM chat_messages "
+                "WHERE person_id=:person_id AND direction='received' "
+                "ORDER BY created_at DESC LIMIT :n",
+                {"person_id": person_id, "n": n},
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("健康度取数失败：%s", exc)
+            return {"health": self.HEALTH_DEFAULT, "gottman_zone": "no_signal",
+                    "offset": 0.0, "note": "取数失败：%s" % exc}
+
+        msgs = [{"content": (r.get("content") or ""), "direction": "received"}
+                for r in (rows or [])]
+        try:
+            from services.relation_metrics import analyze_sequence
+            seq = analyze_sequence(msgs)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("relation_metrics 不可用，健康度按无信号处理：%s", exc)
+            return {"health": self.HEALTH_DEFAULT, "gottman_zone": "no_signal",
+                    "offset": 0.0, "note": "relation_metrics 不可用：%s" % exc}
+
+        ratio = seq.get("ratio") or {}
+        hm = seq.get("horsemen_total") or {}
+        info = self.compute_health(
+            positive=int(ratio.get("positive", 0)),
+            negative=int(ratio.get("negative", 0)),
+            neutral=int(ratio.get("neutral", 0)),
+            contempt_hits=int(hm.get("contempt", 0)),
+            criticism_hits=int(hm.get("criticism", 0)),
+        )
+        info["scan_count"] = seq.get("message_count", 0)
+        info["offset"] = self.health_offset(info["health"])
+
+        # 落库：与 loyalty 同级，写在同一行 scores_json 顶层
+        try:
+            scores = self.get_current(person_id)
+            scores[self.HEALTH_KEY] = info["health"]
+            self._save_current(person_id, scores)
+            info["saved"] = True
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("健康度落库失败：%s", exc)
+            info["saved"] = False
+        return info
 
     def _save_current(self, person_id: str, scores: dict[str, float]) -> float:
         clamped = self._clamp_scores(scores)
@@ -413,6 +601,11 @@ class AffectionEngine:
         if loyalty is None:
             loyalty = self._read_stored_loyalty(person_id)
         clamped[self.LOYALTY_KEY] = self._clamp_value(loyalty)
+        # R3.3-84：health 同样随该行落库，不进 clamped 的加权统计（不进 WEIGHTS）。
+        health = scores.get(self.HEALTH_KEY)
+        if health is None:
+            health = self._read_stored_health(person_id)
+        clamped[self.HEALTH_KEY] = round(max(0.0, min(100.0, float(health))), 2)
         total = self.get_total_with_bonus(person_id, clamped)
         self.db.execute(
             "INSERT OR REPLACE INTO current_affection "
@@ -917,6 +1110,9 @@ class AffectionEngine:
     # 总分 / 区间 / 阶段
     # ------------------------------------------------------------------ #
     def get_total(self, scores: dict[str, float]) -> float:
+        # R3.3-84：权重为整数相对权重（和 = WEIGHT_SUM = 107），此处按实际权重和归一化。
+        # 归一化后与"权重和恰为 1.0"的写法在数学上完全等价，
+        # 故总分数值不因基数换算而改变，而权重可直接读作占比分子。
         weight_sum = sum(self.WEIGHTS.values())
         if weight_sum <= 0:
             return 50.0
@@ -1107,6 +1303,8 @@ class AffectionEngine:
             "trend_7d": trend_7d,
             "trend_30d": trend_30d,
             "scores": scores,
+            # R3.3-84：关系健康度（Gottman 正负比 + 四骑士）及其对总分的偏移
+            "health": self._health_snapshot(person_id),
         }
 
     def get_recommended_actions(self, total_score: float) -> list[str]:

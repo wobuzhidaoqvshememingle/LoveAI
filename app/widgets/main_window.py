@@ -72,6 +72,70 @@ _ANALYSIS_CARDS = [
 ]
 
 
+# ------------------------------------------------------------------ #
+# 【回复】链路：候选话术提取（消费侧）；与生产侧
+# app/service_facade.py::collect_reply_candidates 保持同一优先级与同一数据源。
+# ------------------------------------------------------------------ #
+def _extract_reply_candidates(data: dict) -> list:
+    """从分析结果 data 提取最多 3 条候选话术（真实数据源）。
+
+    优先级：
+      1. data 顶层 reply_candidates / replies / suggested_replies / reply_options
+         （生产侧 service_facade 现已透传 reply_candidates）；
+      2. 嵌套 data["orchestration"]["candidates"]
+         （auto_strategy_pipeline 真实产出的 3 条话术）；
+      3. 单条字符串 data["reply"] / data["suggested_reply"]（旧键兼容）。
+
+    修复背景（R-Reply）：此前只认顶层 4 个键 + data["reply"]，而生产侧真实候选
+    藏在嵌套 orchestration["candidates"] 里，两边对不上 → 三个候选框恒空。
+    """
+    if not isinstance(data, dict):
+        return []
+    items: list = []
+    for key in ("reply_candidates", "replies", "suggested_replies", "reply_options"):
+        raw = data.get(key)
+        if isinstance(raw, (list, tuple)) and raw:
+            items = list(raw)
+            break
+    if not items:
+        orch = data.get("orchestration")
+        if isinstance(orch, dict):
+            raw = orch.get("candidates")
+            if isinstance(raw, (list, tuple)) and raw:
+                items = list(raw)
+    cands: list[str] = []
+    for item in items:
+        if isinstance(item, str):
+            cands.append(item)
+        elif isinstance(item, dict):
+            cands.append(str(item.get("text") or item.get("reply")
+                             or item.get("content") or ""))
+    if not cands:
+        for key in ("reply", "suggested_reply"):
+            v = data.get(key)
+            if isinstance(v, str) and v.strip():
+                cands.append(v)
+                break
+    return [c.strip() for c in cands if c and str(c).strip()][:3]
+
+
+def _analysis_card_value(key: str, data: dict, cands: list) -> str:
+    """计算某张分析卡的展示文本。
+
+    「回复建议」(key="reply") 卡片与三个候选框共用同一真实数据源 cands，
+    有候选时逐条列出，否则回落到 data["reply"]/data["suggested_reply"]。
+    """
+    if key == "reply":
+        if cands:
+            return "\n".join(cands)
+        v = data.get("reply") or data.get("suggested_reply") or ""
+        return str(v).strip() if v else ""
+    val = data.get(key, "")
+    if isinstance(val, (dict, list)):
+        val = json.dumps(val, ensure_ascii=False, indent=2)
+    return str(val) if val else ""
+
+
 def _load_qss(window: QWidget) -> None:
     """加载 resources/qss/main.qss（可选，文件不存在时静默跳过）。"""
     try:
@@ -142,6 +206,8 @@ class MainWindow(QMainWindow):
         self._signals = get_signals()
         self._current_person_id: str | None = None
         self._analysis_card_labels: dict[str, QLabel] = {}
+        # 【回复】链路：最近一次分析的真实候选话术（与三个候选框同源），供一键填入取用
+        self._reply_candidates_cache: list[str] = []
 
         # 标题版本号读配置，不再硬编码（避免发版后标题与实际版本脱节）
         _ver = "3.1.0"
@@ -1799,15 +1865,23 @@ class MainWindow(QMainWindow):
         if not pid:
             QMessageBox.warning(self, "提示", "请先选择对象")
             return
-        # 从回复建议卡片获取建议回复
-        reply_lbl = self._analysis_card_labels.get("reply")
-        reply_text = ""
-        if reply_lbl:
-            reply_text = reply_lbl.text()
-        # 清理卡片标签前缀
-        for prefix in ["建议回复：", "回复：", "（暂无数据）"]:
-            reply_text = reply_text.replace(prefix, "")
-        reply_text = reply_text.strip()
+        # 【回复】链路：直接取真实候选话术（与三个候选框/「回复建议」卡片同源），
+        # 不再从卡片标签文本剥前缀（卡片为空时旧写法必然报「暂无建议回复」）。
+        cands = [c for c in (getattr(self, "_reply_candidates_cache", None) or []) if c]
+        if not cands:
+            # 兼容：缓存缺失时读三个候选框里用户可见/可改的文本
+            for box in (getattr(self, "_reply_candidate_edits", None) or []):
+                t = box.toPlainText().strip()
+                if t:
+                    cands.append(t)
+        reply_text = cands[0] if cands else ""
+        if not reply_text:
+            # 旧路径兼容：卡片标签文本（剥掉历史前缀）
+            reply_lbl = self._analysis_card_labels.get("reply")
+            legacy = reply_lbl.text() if reply_lbl else ""
+            for prefix in ["建议回复：", "回复：", "（暂无数据）"]:
+                legacy = legacy.replace(prefix, "")
+            reply_text = legacy.strip()
         if not reply_text:
             QMessageBox.information(self, "提示", "暂无建议回复，请先执行分析")
             return
@@ -1895,12 +1969,14 @@ class MainWindow(QMainWindow):
 
     def _on_analysis_ready(self, payload: dict) -> None:
         data = payload.get("data") or {}
+        # 【回复】链路：先提取真实候选话术（顶层 reply_candidates 或嵌套 orchestration）
+        cands = _extract_reply_candidates(data)
+        self._reply_candidates_cache = cands
         # 8 张卡片填充；data 可能是嵌套 dict
+        # 「回复建议」卡片与三个候选框共用同一真实数据源（见 _analysis_card_value）
         for key, lbl in self._analysis_card_labels.items():
-            val = data.get(key, "")
-            if isinstance(val, (dict, list)):
-                val = json.dumps(val, ensure_ascii=False, indent=2)
-            lbl.setText(str(val) if val else "（暂无数据）")
+            val = _analysis_card_value(key, data, cands)
+            lbl.setText(val if val else "（暂无数据）")
         # R3.3-22 单轮分析输出卡（六字段）
         if getattr(self, "_analysis_output_card", None) is not None:
             try:
@@ -1923,26 +1999,17 @@ class MainWindow(QMainWindow):
         self._refresh_quick_panel()
 
     def _populate_reply_candidates(self, data: dict) -> None:
-        """从分析结果提取最多 3 条候选话术，并排填入三栏；无数据则清空。"""
+        """从分析结果提取最多 3 条候选话术，并排填入三栏；无数据则清空。
+
+        数据源与生产侧 service_facade.collect_reply_candidates 一致：
+        data["reply_candidates"] 或嵌套 data["orchestration"]["candidates"]。
+        """
+        cands = _extract_reply_candidates(data)
+        # 缓存真实候选：供「一键填入微信」直接取用（不再从卡片标签文本剥前缀）
+        self._reply_candidates_cache = cands
         edits = getattr(self, "_reply_candidate_edits", None)
         if not edits:
             return
-        cands: list[str] = []
-        for key in ("reply_candidates", "replies", "suggested_replies", "reply_options"):
-            raw = data.get(key)
-            if isinstance(raw, list) and raw:
-                for item in raw:
-                    if isinstance(item, str):
-                        cands.append(item)
-                    elif isinstance(item, dict):
-                        cands.append(str(item.get("text") or item.get("reply") or item.get("content") or ""))
-                break
-        # 兜底：没有列表时，把 reply 卡片文本作为候选 1
-        if not cands:
-            reply = data.get("reply", "")
-            if isinstance(reply, str) and reply.strip():
-                cands.append(reply)
-        cands = [c.strip() for c in cands if c and str(c).strip()]
         for i, box in enumerate(edits):
             box.setPlainText(cands[i] if i < len(cands) else "")
 

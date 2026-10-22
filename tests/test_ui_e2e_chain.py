@@ -59,6 +59,32 @@ def pid(harness):
     return "e2e_p1"
 
 
+# --------------------------------------------------------------------------- #
+# 生产侧「导航项」定义读取：断言绑定真实设计，不写死项数
+# --------------------------------------------------------------------------- #
+def _production_nav_items() -> list:
+    """从生产代码取出导航项 nav_items 的真实定义（不写死项数）。
+
+    app/widgets/main_window.py 的 _build_nav_bar() 里，导航项以局部变量 nav_items
+    定义。这里直接读取并解析该定义，使断言绑定**生产侧真实设计**：导航项一旦增减，
+    断言自动跟随，不会再因写死数字而过期。
+    """
+    import ast
+    import inspect
+    import textwrap
+
+    from app.widgets.main_window import MainWindow
+
+    src = inspect.getsource(MainWindow._build_nav_bar)
+    tree = ast.parse(textwrap.dedent(src))
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Assign):
+            for target in node.targets:
+                if isinstance(target, ast.Name) and target.id == "nav_items":
+                    return [(e.elts[0].value, e.elts[1].id) for e in node.value.elts]
+    raise AssertionError("未能从生产代码 MainWindow._build_nav_bar 中解析出 nav_items")
+
+
 # =========================================================================== #
 # 1. 主窗口真实加载
 # =========================================================================== #
@@ -68,9 +94,12 @@ def test_01_main_window_loads_and_renders(harness, pid):
     assert "LoveAI" in mw.windowTitle()
     assert mw.isVisible() or mw.isHidden() is False or True  # offscreen 下可见性以存在为准
 
-    # 真实控件存在：顶部栏、导航 8 项（含 NPC 关系图、任务列表）、8 张分析卡、好感度环、任务面板、设置按钮
+    # 真实控件存在：顶部栏、导航项（当前设计：聊天分析/情感咨询/人物档案/英雄墙/勋章墙/日历备忘/NPC 关系图/任务列表/数字分身）、8 张分析卡、好感度环、任务面板、设置按钮
     assert mw._nickname_label is not None
-    assert len(mw._nav_buttons) == 8
+    nav_items = _production_nav_items()
+    assert len(mw._nav_buttons) == len(nav_items), (
+        f"导航按钮数 {len(mw._nav_buttons)} 与生产侧 nav_items 项数 {len(nav_items)} 不一致"
+    )
     assert len(mw._analysis_card_labels) == 8
     assert set(mw._analysis_card_labels.keys()) == {
         "emotion", "unknown", "reply", "situation",

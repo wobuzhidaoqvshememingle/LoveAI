@@ -588,7 +588,15 @@ class LoveAIApplication(QObject):
             from services.wechat_advanced_reader import WechatAdvancedReader
             from tools.wechat_db_decryptor import WechatDbDecryptor
             from tools.wechat_memory_dumper import WechatMemoryDumper
-            self.services["wechat_auto_importer"] = WechatAutoImporter()
+            # 【断点修复】原来这里是裸构造 WechatAutoImporter()：_extractor / _reader 都是 None，
+            # 而 _run_db_pipeline 只在两者非 None 时才执行 → 一键导入按钮实际是空转。
+            # 现在注入真实依赖（密钥提取器模块 + DB 读取器模块）。
+            from services import wechat_db_reader as _wx_db_reader_mod
+            from services import wechat_key_extractor as _wx_key_extractor_mod
+            self.services["wechat_auto_importer"] = WechatAutoImporter(
+                key_extractor=_wx_key_extractor_mod,
+                db_reader=_wx_db_reader_mod,
+            )
             self.services["wechat_access_manager"] = WechatAccessManager()
             self.services["wechat_vision_monitor"] = WechatVisionMonitor()
             self.services["wechat_cache_reader"] = WechatCacheReader()
@@ -607,13 +615,47 @@ class LoveAIApplication(QObject):
         # R3.3-70 + 第十七章红线：内存读密钥类通道默认不加载，显式开启才装配。
         if _wechat_on:
           try:
-            from services.wechat_key_extractor import WechatKeyExtractor
-            from services.wechat_realtime_monitor import WechatRealtimeMonitor
-            self.services["wechat_key_extractor"] = WechatKeyExtractor()
-            self.services["wechat_realtime_monitor"] = WechatRealtimeMonitor()
+            # 【断点修复】services/wechat_key_extractor.py 只有模块级函数，
+            # 不存在 WechatKeyExtractor 类 → 旧写法 `import WechatKeyExtractor` 必抛 ImportError，
+            # 整个 5.1c 分支被 except 吞掉，密钥提取器与实时监听器都装不上。
+            # 另外实时监听器类名是 WeChatRealtimeMonitor（大写 C），旧写法也不对。
+            from services import wechat_key_extractor as _wx_key_extractor_mod
+            from services.wechat_realtime_monitor import WeChatRealtimeMonitor
+            self.services["wechat_key_extractor"] = _wx_key_extractor_mod
+            self.services["wechat_realtime_monitor"] = WeChatRealtimeMonitor()
             logger.info("微信密钥提取器+实时监听器就绪（6种提取方法+3种监听模式）")
           except Exception as e:
             logger.warning("微信密钥提取器/实时监听器初始化失败: %s", e)
+
+        # 5.1d 微信聊天记录「一键导入」总控（发现库→认版本→取密钥→解密→导入 一条线）
+        # 契约：services/wechat_oneclick.py 的 WechatOneClick（UI 侧按同一契约对接）。
+        # 红线：本服务默认只走零风险/低风险路线；注入类动作必须显式知情同意，绝不自动执行。
+        if _wechat_on:
+          try:
+            from services.wechat_oneclick import WechatOneClick
+            self.services["wechat_oneclick"] = WechatOneClick(
+                key_extractor=self.services.get("wechat_key_extractor"),
+                importer=self.services.get("wechat_importer"),
+                config=config,
+            )
+            logger.info("WechatOneClick 就绪（微信聊天记录一键导入总控）")
+          except Exception as e:
+            logger.warning("WechatOneClick 初始化失败: %s", e)
+
+        # 5.1e 微信密钥「现场抓取」编排（1–7 步：检测→关微信→重启→前台化→
+        #      等待扫码/代点登录→注入控制器 DLL→轮询回收密钥→写加密缓存）
+        # 实现：services/wechat_key_controller.WeChatKeyFlow（路线 C，ctypes 直调 DLL）。
+        # 红线：默认 consent_injection=False，此时**不关微信、不注入**；
+        #       注入类动作必须由 UI 先弹一次显式知情同意再传 True，由程序自动执行。
+        if _wechat_on:
+          try:
+            from services.wechat_key_controller import WeChatKeyFlow
+            self.services["wechat_keyflow"] = WeChatKeyFlow(
+                key_extractor=self.services.get("wechat_key_extractor"),
+            )
+            logger.info("WeChatKeyFlow 就绪（微信密钥现场抓取：ctypes 直调控制器 DLL）")
+          except Exception as e:
+            logger.warning("WeChatKeyFlow 初始化失败: %s", e)
 
         # 5.2 代理服务（内置代理管理，用于访问外部AI）
         try:
@@ -1014,9 +1056,19 @@ class LoveAIApplication(QObject):
                     logger.warning("启动探活明细已写入 %s", path)
                     self._startup_probe_log = path
                 # 收集降级/失败项明细，用于状态栏提示
-                items = report.get("items") or report.get("services") or {}
-                bad = [k for k, v in items.items()
-                       if isinstance(v, dict) and v.get("status") in ("degraded", "fail")]
+                # v3.2.0 (P1-3) 修复：startup_probe 返回的 items 是 list[dict]，
+                # 此处原写 items.items() 会抛 'list' object has no attribute
+                # 'items'，导致整个探针流程被 except 吞掉。加类型分支。
+                items_raw = report.get("items") or report.get("services") or {}
+                bad = []
+                if isinstance(items_raw, list):
+                    bad = [it.get("name") for it in items_raw
+                           if isinstance(it, dict)
+                           and it.get("status") in ("degraded", "fail")]
+                elif isinstance(items_raw, dict):
+                    bad = [k for k, v in items_raw.items()
+                           if isinstance(v, dict)
+                           and v.get("status") in ("degraded", "fail")]
                 self._startup_probe_bad = bad
         except Exception as e:  # 探活本身绝不能拖垮启动
             logger.warning("启动探活跳过: %s", e)

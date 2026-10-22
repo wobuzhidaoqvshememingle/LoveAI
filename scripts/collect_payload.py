@@ -11,7 +11,7 @@ LoveAI 封包基础设施 - 运行时与模型归集脚本（collect_payload）
         ollama.exe
         lib\ollama\ggml*.dll, libllama*.dll, libmtmd.dll, libomp.dll ...
     models_local\                   # 本地大模型（gguf + smollm2 onnx + HF 基座 + lora）
-    knowledge\                      # 预置知识库（unified_search.db + chroma_db）
+    knowledge\                      # 预置知识库（unified_search.db；R3387 起不含 chroma_db）
     browser_ai\                     # 浏览器AI能力（playwright 包 + ms-playwright 浏览器二进制）
         playwright_pkg\playwright\
         ms-playwright\chromium-1243\, chromium_headless_shell-1243\, ffmpeg-1011\
@@ -213,7 +213,7 @@ def collect_models(manifest: dict) -> None:
 
 
 def collect_knowledge(manifest: dict) -> None:
-    """归集预置知识库：data/unified_search.db + data/chroma_db/。"""
+    """归集预置知识库：data/unified_search.db（R3387 起不再归集 data/chroma_db）。"""
     print("[knowledge]")
     dst = os.path.join(PAYLOAD_ROOT, "knowledge")
     if os.path.exists(dst):
@@ -224,22 +224,13 @@ def collect_knowledge(manifest: dict) -> None:
     if os.path.isfile(db_src):
         _link_or_copy(db_src, os.path.join(dst, "unified_search.db"))
         files += 1
-    chroma_src = os.path.join(ROOT, "data", "chroma_db")
-    if os.path.isdir(chroma_src):
-        for dp, _, fns in os.walk(chroma_src):
-            for fn in fns:
-                s = os.path.join(dp, fn)
-                d = os.path.join(dst, "chroma_db", os.path.relpath(s, chroma_src))
-                # chroma.sqlite3 易被运行中的进程/pytest 占用：用独立拷贝而非硬链接，
-                # 避免源文件锁传导到安装器压缩阶段。
-                os.makedirs(os.path.dirname(d), exist_ok=True)
-                shutil.copy2(s, d)
-                files += 1
+    # R3387：不再归集 data/chroma_db —— 分发态 chromadb 不可用（缺子模块与原生绑定），
+    # 出厂检索由 FTS 单引擎承担；盘上 data/chroma_db 保留不删（开发机在用）。
     manifest["knowledge"] = {
         "status": "OK" if files else "MISSING",
         "bytes": _tree_size(dst),
         "files": files,
-        "contents": ["unified_search.db", "chroma_db/"],
+        "contents": ["unified_search.db"],
     }
     print(f"  [OK] knowledge: {files} 文件, {_tree_size(dst)/1024/1024:.1f} MB")
 

@@ -1,6 +1,6 @@
 
 [settings-store] 无共享配置文件，使用本地设置
-[settings-store] 设置文件路径： C:\Users\87433\AppData\Roaming\Electron\settings.json
+[settings-store] 设置文件路径： %USERPROFILE%\AppData\Roaming\Electron\settings.json
 [DIAG] scaleFactor= 1.25 workArea= {"x":0,"y":0,"width":1536,"height":834} size= {"width":1536,"height":834} winW/H= 400 600 initX/Y= 1096 214
 [DIAG] actual bounds= {"x":1096,"y":213,"width":400,"height":604}
 [ipc] 所有 IPC 处理器已注册

@@ -2,7 +2,7 @@
 
 > 第三套极端人设：焦虑型男性用户（sent） + NPD 自恋型人格障碍 / 回避型依恋 / 童年创伤女性（received）
 > 核心判定：①系统能否识别 NPD 特征而不与 BPD 混淆；②是否套模板。
-> 验证方式：干净临时 SQLite 库（`E:\Temp\npd_test_*\test_loveai.db`），测完已清理。LLM 离线，走规则兜底。
+> 验证方式：干净临时 SQLite 库（`<E盘>\Temp\npd_test_*\test_loveai.db`），测完已清理。LLM 离线，走规则兜底。
 
 ---
 
@@ -201,6 +201,6 @@ reasoning 中含："精神操控审计：pua_score=12（自恋3/操纵1/煤气�
 
 ## 附：清理说明
 
-- 临时库 `E:\Temp\npd_test_*`、临时画像目录 `data/persons/npd_girl`、`data/persons/danJuan`、诊断脚本 `tools/_npd_diag*.py`、`tools/_npd_dump.py`、`tools/_bpd_dump.py` 及 `npd_verification_output/` 内 `_*.txt/_*.log` 临时文件均已清理（保留 `npd_verification_results.json` 作为证据）。
+- 临时库 `<E盘>\Temp\npd_test_*`、临时画像目录 `data/persons/npd_girl`、`data/persons/danJuan`、诊断脚本 `tools/_npd_diag*.py`、`tools/_npd_dump.py`、`tools/_bpd_dump.py` 及 `npd_verification_output/` 内 `_*.txt/_*.log` 临时文件均已清理（保留 `npd_verification_results.json` 作为证据）。
 - 三个服务文件改动前均已备份（`.bak_npd`），未覆盖更早的 `.bak_bpd`/`.bak`。
 - 开发库 `data/loveai.db` 未被污染。

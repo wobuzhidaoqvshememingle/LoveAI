@@ -34,6 +34,7 @@ from services.affection_engine import AffectionEngine  # noqa: E402
 from services.task_engine import TaskEngine  # noqa: E402
 from services.stats_service import StatsService  # noqa: E402
 from services.direction_compass import DirectionCompass  # noqa: E402
+import services.wechat_db_reader as _wechat_db_reader  # noqa: E402
 
 _FIX = os.path.join(_PROJECT_ROOT, "services", "collectors", "fixtures")
 _PC_ACCOUNT = os.path.join(_FIX, "pc_account")
@@ -55,7 +56,20 @@ class TestE2EFullChain(unittest.TestCase):
         self.db = Database(self.db_path)
         self.db.init_tables()
 
+        # 解密缓存隔离（离线/确定性的前提）：
+        # WeChatDBReader 用 `work_dir or DECRYPT_CACHE_DIR` 决定明文库落盘目录，而
+        # _decrypt_to_work 的缓存键**只含相对路径**（work_dir/<version>/relpath）。若沿用
+        # 工程级 data/wechat_decrypted，夹具 services/collectors/fixtures/pc_account 的
+        # db_storage/message/message_0.db 会与真实账号的同名解密产物（58MB、8.3 万条）
+        # 撞车——本用例就会读到真实微信历史：非离线、非确定性、且涉及用户真实聊天内容。
+        # 故在本用例内把缓存根改到临时目录，用完即还原（不改任何共享源码）。
+        self.iso_cache = os.path.join(self.tmpdir, "wechat_decrypted")
+        os.makedirs(self.iso_cache, exist_ok=True)
+        self._saved_cache_dir = _wechat_db_reader.DECRYPT_CACHE_DIR
+        _wechat_db_reader.DECRYPT_CACHE_DIR = self.iso_cache
+
     def tearDown(self):
+        _wechat_db_reader.DECRYPT_CACHE_DIR = self._saved_cache_dir
         try:
             self.db.engine.dispose()
         except Exception:
@@ -81,6 +95,15 @@ class TestE2EFullChain(unittest.TestCase):
         self.assertGreater(len(p1), 0, "P1 pc_account 必须解出非空消息")
         self.assertGreater(len(t4), 0, "T4 screenshots 必须 OCR 出非空消息")
         self.assertGreater(len(t3), 0, "T3 粘贴必须解析出非空消息")
+
+        # 采集源必须是本用例的夹具（离线/确定性护栏）：
+        # ① 解密产物必须落在本用例的隔离缓存目录内 —— 证明既没读工程级缓存、也没读真实库；
+        # ② 消息量必须与夹具规模相称 —— 真实账号缓存会一次给出 8 万+ 条，直接暴露污染。
+        iso_db = os.path.join(self.iso_cache, "4.x", "db_storage", "message", "message_0.db")
+        self.assertTrue(os.path.exists(iso_db),
+                        "P1 解密产物必须落在用例隔离缓存目录内: %s" % iso_db)
+        self.assertLess(len(p1), 1000,
+                        "P1 解出 %d 条消息，远超夹具规模，疑似再次读到真实账号缓存" % len(p1))
 
         store = MessageStore(self.db)
         all_msgs = list(p1) + list(t4) + list(t3)

@@ -3,12 +3,22 @@
 微信密钥多方法提取器（低风险优先，自动尝试）
 
 风险阶梯（从低到高）：
+  方法0  extract_key_wxkey_log        —— 读 wx_key.dll 状态日志（只读文件，不碰进程）★实测首选
+  方法0b extract_key_from_record_files —— 读密钥记录/明文文件（只读文件）
   方法5  extract_key_registry    —— 读注册表 / 本地配置文件（不读进程）
   方法6  extract_key_process_args —— 读进程启动参数 / 环境变量（不读内存）
   方法1  extract_key_wechat_decrypt —— 4.x WeChatAppEx 内存扫描（只读，不注入）
   方法2  extract_key_pywxdump     —— 3.x WeChat 内存扫描（只读，不注入）
   方法3  extract_key_dump_rs      —— 跨版本特征码扫描（只读）
   方法4  extract_key_chatlog_alpha —— DLL 注入模拟算法（默认禁用，高风险）
+
+外部工具链（本模块不自动执行，只提供结果通道）：
+  - wx_key（ycccccccy/wx_key, MIT）：Flutter GUI + DLL 注入，在登录时刻抓
+    setCipherKey 的 RDX，写 %TEMP%\\wx_key_status.log（"KEY:<hex>"）。
+    注入动作必须由用户手动在 GUI 里发起，本模块只读结果。
+  - Android root：collectors/android/a4_root_db.py（EnMicroMsg.db + SQLCipher 1.x，
+    key = MD5(IMEI + uin)[:7]）—— 老版本手机路线。
+  - 3.x 桌面离线：pywxdump / wechat-decrypt / wechat-dump-rs。
 
 所有"成功"的候选密钥都会被 HMAC / 首页解密校验，避免把内存里的随机字节误判为密钥。
 密钥缓存到 data/wechat_keys/，用机器特定信息（机器名 + 用户名 + 卷序列号）派生
@@ -19,6 +29,7 @@ from __future__ import annotations
 import ctypes
 import logging
 import os
+import re
 import struct
 import time
 import hashlib
@@ -521,6 +532,46 @@ def extract_key_auto(db_path: str,
         else:
             log.append({"method": "cache", "ok": False, "reason": "缓存密钥已失效"})
 
+    # 0.2) 全局 passphrase 缓存 —— passphrase 与具体库无关（同一账号共用一个），
+    #      所以任一个库配过的 passphrase 都能直接复用到其它库
+    _global_cache_key = os.path.join(_PROJECT_ROOT, "data", "wechat_keys", "_global.db")
+    if os.path.abspath(db_path) != os.path.abspath(_global_cache_key):
+        _g = get_cached_key(_global_cache_key)
+        if _g and _g.get("key"):
+            from . import wechat_db_decryptor as dec
+            ok = (dec.verify_key_sqlcipher4(db_path, _g["key"], salt=salt)
+                  if version == "4.x"
+                  else dec.verify_key_wxsqlite3(db_path, _g["key"]))
+            log.append({"method": "global_cache", "ok": bool(ok), "via": _g.get("method")})
+            if ok:
+                result.update({"ok": True, "key": _g["key"],
+                               "method": f"global_cache+{_g.get('method')}"})
+                _save_key(db_path, result)
+                return result
+
+    # 0.5) wx_key（DLL 注入工具）的结果通道 —— 只读日志/记录文件，绝不注入
+    for _name, _fn in (("wx_key_log", extract_key_wxkey_log),
+                       ("key_record", extract_key_from_record_files)):
+        try:
+            info = _fn()
+        except Exception as e:  # noqa: BLE001
+            log.append({"method": _name, "ok": False, "reason": str(e)})
+            continue
+        if info and info.get("key"):
+            from . import wechat_db_decryptor as dec
+            ok = (dec.verify_key_sqlcipher4(db_path, info["key"], salt=salt)
+                  if version == "4.x"
+                  else dec.verify_key_wxsqlite3(db_path, info["key"]))
+            log.append({"method": _name, "ok": bool(ok), "via": info.get("method"),
+                        "source": info.get("source")})
+            if ok:
+                result.update({"ok": True, "key": info["key"],
+                               "method": info.get("method") or _name})
+                _save_key(db_path, result)
+                return result
+        else:
+            log.append({"method": _name, "ok": False, "reason": "未找到记录"})
+
     # 进程信息
     proc = process_info or detect_wechat_process()
     pid = proc["pid"] if proc else None
@@ -577,6 +628,133 @@ def extract_key_auto(db_path: str,
     return result
 
 
+# ---------------------------------------------------------------------------
+# wx_key（DLL 注入工具）结果通道 —— 只读结果，绝不注入
+# ---------------------------------------------------------------------------
+# wx_key 的真实产出有两处：
+#   1) %TEMP%\wx_key_status.log —— DLL 自己追加写，格式 "KEY:<64位hex>"
+#      （见 wx_key 源码 dllmain.cpp: WriteLogToFile("KEY:" + keyHex)）
+#   2) 用户/历史脚本留下的密钥记录文件（JSON {"key","method","salt"} 或裸 hex）
+# 本模块只【读】这两处；注入动作始终由用户在 wx_key 界面里手动完成。
+
+_WXKEY_LOG_NAME = "wx_key_status.log"
+_KEY_JSON_RE = re.compile(r'"key"\s*:\s*"([0-9a-fA-F]{64})"')
+_KEY_HEX_RE = re.compile(r"\b([0-9a-fA-F]{64})\b")
+
+
+def _wxkey_log_candidates() -> List[str]:
+    """wx_key.dll 状态日志的候选路径（TEMP 优先，其次工具/数据目录）。"""
+    cands: List[str] = []
+    for env in ("TEMP", "TMP", "TMPDIR"):
+        d = os.environ.get(env)
+        if d:
+            cands.append(os.path.join(d, _WXKEY_LOG_NAME))
+    for d in (os.path.join(_PROJECT_ROOT, "tools", "wx_key"),
+              os.path.join(_PROJECT_ROOT, "data", "wechat_keys")):
+        cands.append(os.path.join(d, _WXKEY_LOG_NAME))
+    seen, out = set(), []
+    for c in cands:
+        if c not in seen:
+            seen.add(c)
+            out.append(c)
+    return out
+
+
+def extract_key_wxkey_log() -> Optional[Dict]:
+    """从 wx_key.dll 的状态日志读取已捕获的 32 字节密钥。
+
+    日志是追加写的，可能残留多行 KEY:，取【最后一条】（最新一次抓取）。
+    只读文件，不触碰微信进程。
+    """
+    key, src = None, None
+    for path in _wxkey_log_candidates():
+        if not os.path.isfile(path):
+            continue
+        try:
+            with open(path, "r", encoding="utf-8", errors="ignore") as f:
+                text = f.read()
+        except Exception as e:  # noqa: BLE001
+            logger.debug("读 wx_key 日志失败 %s：%s", path, e)
+            continue
+        for m in re.finditer(r"KEY:\s*([0-9a-fA-F]{64})", text):
+            key, src = m.group(1).lower(), path
+    if key:
+        return {"key": key, "method": "wx_key_log", "source": src, "salt": ""}
+    return None
+
+
+def _scan_key_record_file(path: str) -> Optional[Dict]:
+    """从单个记录文件里抽密钥（JSON 优先，退化为裸 64 位 hex）。"""
+    try:
+        text = open(path, "r", encoding="utf-8", errors="ignore").read()
+    except Exception:  # noqa: BLE001
+        return None
+    method = "plain_file"
+    try:
+        obj = json.loads(text)
+        if isinstance(obj, dict) and obj.get("method"):
+            method = str(obj["method"])
+    except Exception:  # noqa: BLE001
+        pass
+    m = _KEY_JSON_RE.search(text) or _KEY_HEX_RE.search(text)
+    if m:
+        return {"key": m.group(1).lower(), "method": method,
+                "source": path, "salt": ""}
+    return None
+
+
+def extract_key_from_record_files(extra_paths: Optional[Iterable[str]] = None) -> Optional[Dict]:
+    """从密钥记录文件中读取密钥（只读）。
+
+    覆盖 data/wechat_keys/、tools/wx_key/ 下的 *.txt / *.json，
+    以及调用方通过 extra_paths 传入的路径（如历史 _wx_key_plain.txt）。
+    """
+    cands: List[str] = list(extra_paths or [])
+    for d in (os.path.join(_PROJECT_ROOT, "data", "wechat_keys"),
+              os.path.join(_PROJECT_ROOT, "tools", "wx_key")):
+        if not os.path.isdir(d):
+            continue
+        try:
+            for fn in sorted(os.listdir(d)):
+                if fn.lower().endswith((".txt", ".json")):
+                    cands.append(os.path.join(d, fn))
+        except Exception:  # noqa: BLE001
+            pass
+    for p in cands:
+        if p and os.path.isfile(p):
+            info = _scan_key_record_file(p)
+            if info and info.get("key"):
+                return info
+    return None
+
+
+def import_key_plain(plain_hex: str, db_path: Optional[str] = None,
+                     method: str = "manual_import") -> Dict:
+    """把已知的 32 字节密钥写入本机加密缓存，供后续直接复用。
+
+    Args:
+        plain_hex: 64 位 hex 字符串
+        db_path: 绑定的数据库路径；未指定时写入全局条目
+        method: 来源标记（如 login_moment_wx_key_dll）
+    """
+    key = (plain_hex or "").strip().lower()
+    if not re.fullmatch(r"[0-9a-f]{64}", key):
+        return {"ok": False, "reason": "密钥必须是 64 位 hex"}
+    target = db_path or os.path.join(_PROJECT_ROOT, "data", "wechat_keys", "_global.db")
+    _save_key(target, {"key": key, "method": method, "salt": ""})
+    return {"ok": True, "key": key, "cache": _cache_path_for(target)}
+
+
+def load_key_cache(*args, **kwargs):
+    """兼容别名：历史调用点引用过 load_key_cache。"""
+    return get_cached_key(*args, **kwargs)
+
+
+def _load_key_cache(*args, **kwargs):
+    """兼容别名（私有）：历史脚本引用过 _load_key_cache。"""
+    return get_cached_key(*args, **kwargs)
+
+
 __all__ = [
     "detect_wechat_process",
     "MemoryReader",
@@ -589,4 +767,9 @@ __all__ = [
     "extract_key_auto",
     "get_cached_key",
     "clear_cache",
+    "extract_key_wxkey_log",
+    "extract_key_from_record_files",
+    "import_key_plain",
+    "load_key_cache",
+    "_load_key_cache",
 ]

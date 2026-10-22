@@ -331,41 +331,114 @@ class WeChatImporter:
             return None
 
     def extract_key_with_wxkey(self, wechat_install_dir: str = None) -> Optional[str]:
-        """
-        使用wx_key提取微信4.1+的passphrase密钥
-        wx_key原理：DLL注入+Hook WCDB的sqlcipher_codec_ctx_set_cipher函数
-        注意：需要管理员权限，DLL注入有极低风险
-        """
-        wxkey_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'tools', 'wx_key', 'wx_key.exe')
+        """获取微信 4.1+ 的 passphrase 密钥（32 字节 → 64 位 hex）。
 
-        if not os.path.exists(wxkey_path):
-            logger.warning("wx_key未找到，请先下载到tools/wx_key/目录")
-            return None
+        wx_key 原理：DLL 注入 + Hook WCDB 的 setCipherKey，在【登录时刻】抓 RDX
+        里的密钥，写入 %TEMP%\\wx_key_status.log（格式 "KEY:<hex>"）。
+
+        取数顺序（本方法全部只读，不做任何注入）：
+          1) wx_key.dll 状态日志（%TEMP%\\wx_key_status.log）—— 最近一次抓取结果
+          2) data/wechat_keys/ 下的密钥记录文件（*.txt / *.json）
+          3) data/wechat_keys/ 下的加密缓存（机器指纹保护）
+          4) 都没有时：只提示用户手动跑一次 wx_key，不代跑
+        """
+        _ = wechat_install_dir  # 保留签名兼容；目录由 wx_key 自行检测
+        root = os.path.dirname(os.path.dirname(__file__))
 
         try:
-            # 调用wx_key提取密钥
-            cmd = [wxkey_path, '--extract']
-            if wechat_install_dir:
-                cmd.extend(['--dir', wechat_install_dir])
+            from . import wechat_key_extractor as kx
+        except Exception as e:  # noqa: BLE001
+            kx = None
+            logger.warning("加载 wechat_key_extractor 失败：%s", e)
 
-            result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
-            output = result.stdout + result.stderr
+        if kx is not None:
+            for tag, fn in (("wx_key_status.log", getattr(kx, "extract_key_wxkey_log", None)),
+                            ("密钥记录文件", getattr(kx, "extract_key_from_record_files", None))):
+                if fn is None:
+                    continue
+                try:
+                    info = fn()
+                except Exception as e:  # noqa: BLE001
+                    logger.warning("读取 %s 失败：%s", tag, e)
+                    continue
+                if info and info.get("key"):
+                    logger.info("从 %s 读到密钥（method=%s, source=%s）",
+                                tag, info.get("method"), info.get("source"))
+                    return info["key"]
 
-            # 解析输出中的passphrase密钥（64个hex字符）
-            match = re.search(r'([0-9a-fA-F]{64})', output)
-            if match:
-                passphrase = match.group(1)
-                logger.info("wx_key提取密钥成功")
-                return passphrase
-            else:
-                logger.error(f"wx_key输出解析失败: {output}")
-                return None
-        except subprocess.TimeoutExpired:
-            logger.error("wx_key提取超时")
-            return None
-        except Exception as e:
-            logger.error(f"wx_key提取失败: {e}", exc_info=True)
-            return None
+            try:
+                cached = kx.get_cached_key(
+                    os.path.join(root, "data", "wechat_keys", "_global.db"))
+                if cached and cached.get("key"):
+                    logger.info("从加密缓存读到密钥（method=%s）", cached.get("method"))
+                    return cached["key"]
+            except Exception as e:  # noqa: BLE001
+                logger.debug("读取密钥缓存失败：%s", e)
+
+        exe = os.path.join(root, "tools", "wx_key", "wx_key.exe")
+        if os.path.exists(exe):
+            logger.warning(
+                "未找到已抓取的密钥。注入动作不自动执行，请手动打开 %s，"
+                "点提取后按提示登录微信（正常结束会自动卸载/清理；若中途异常退出，微信可能需要重新启动），再回到本程序重试。", exe)
+        else:
+            logger.warning("wx_key 未找到，请把 wx_key.exe 放到 tools/wx_key/ 目录")
+        return None
+
+    def launch_wxkey_capture(self, wait_seconds: int = 180,
+                             poll_interval: float = 3.0) -> dict:
+        """【回退路线】拉起 wx_key GUI 窗口，轮询回收用户在其界面里抓到的密钥。
+
+        设计前提已在 2026-10-17 更新：**一键抓密钥的主干实现不再是本方法**，
+        而是 services/wechat_key_controller.WeChatKeyFlow（路线 C：Python ctypes 直调
+        控制器 wx_key.dll 的 InitializeHook / PollKeyData / GetStatusMessage / CleanupHook），
+        由程序自动完成 检测→关闭微信→重启→前台化→等待扫码（或代点登录）→注入→回收→卸载。
+        ⚠️ 已知限制（2026-10-17 实机结论）：上游 wx_key 的特征码库覆盖不到本机微信 4.1.15.13
+        （`>=4.1.4` 档实测 0 命中，实机报「模式匹配失败，找到 0 个结果」）。因此本机
+        **从未取过密钥的账号**走到 inject 阶段必然失败；只有**已有加密缓存密钥**的账号才能一键走通。
+        详见 docs/微信版本适配与已知限制.md。
+
+        本方法保留为**回退路线**，用于 wechat_key_controller 不可用（例如控制器 DLL 或
+        ctypes 依赖缺失）时：它自己不注入、不 attach、不触碰微信进程，只负责
+         启动 wx_key GUI → 轮询 %TEMP%\\wx_key_status.log → 读到 KEY:<hex> 即缓存并返回，
+        注入动作需用户在 wx_key 界面里自己点。**只有这条回退路线才有"用户手动点"的交互**；
+        主干路线不需要用户敲任何命令或点任何按钮，唯一的物理动作可能是扫码。
+
+        认知更正：主干路线结束时会调用 CleanupHook 干净卸载，因此"抓完微信必崩"
+        **不是必然**；只有异常退出（未走到 CleanupHook）才可能需要重启微信。
+        注入类动作仍受红线约束：只在 UI 侧取得显式知情同意后由程序执行，绝不自动触发。
+
+        Args:
+            wait_seconds: 最长等待秒数（默认 180s，够走完一次登录）
+            poll_interval: 轮询间隔（秒）
+
+        Returns:
+            成功 {ok:True, key, method, source, waited}
+            失败 {ok:False, reason}
+        """
+        root = os.path.dirname(os.path.dirname(__file__))
+        exe = os.path.join(root, "tools", "wx_key", "wx_key.exe")
+        if not os.path.exists(exe):
+            return {"ok": False, "reason": f"wx_key.exe 不存在：{exe}"}
+        try:
+            subprocess.Popen([exe], cwd=os.path.dirname(exe))
+        except Exception as e:  # noqa: BLE001
+            return {"ok": False, "reason": f"启动 wx_key 失败：{e}"}
+
+        try:
+            from . import wechat_key_extractor as kx
+        except Exception as e:  # noqa: BLE001
+            return {"ok": False, "reason": f"加载密钥提取器失败：{e}"}
+
+        waited = 0.0
+        while waited < wait_seconds:
+            info = kx.extract_key_wxkey_log()
+            if info and info.get("key"):
+                kx.import_key_plain(info["key"], method=info.get("method", "wx_key_log"))
+                return {"ok": True, "key": info["key"], "method": info.get("method"),
+                        "source": info.get("source"), "waited": round(waited, 1)}
+            time.sleep(poll_interval)
+            waited += poll_interval
+        return {"ok": False, "reason": f"{wait_seconds}s 内未在 wx_key 日志里读到密钥"}
 
     def open_wechat_db(self, db_path: str, passphrase_hex: str = None, raw_key: str = None):
         """

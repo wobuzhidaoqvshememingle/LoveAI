@@ -12,6 +12,9 @@ LoveAI v2.0 - 策略适配矩阵（因人施策 · 因时制宜）
   - 信号/通知完全由调用方（background_scheduler / UI）自行处理；
   - 数据库通过构造参数 db 注入，可空（无 db 时仅做内存计算）。
 
+本模块是维度分层中的**诊断层**（六维人格：依恋/冲突/爱/边界/分化/情绪稳定），
+本层维度命名空间见 person_state_snapshot.py 的 DimensionLayerRegistry。
+
 学术依据（在匹配表 reason 与代码注释中标注来源）：
   - 依恋理论（Bowlby 1969 / Ainsworth 1978）：回避型/焦虑型/安全型/恐惧型的行为模式；
   - Bowen 家庭系统理论（1978）：自我分化 differentiation、情绪融合 emotional fusion；

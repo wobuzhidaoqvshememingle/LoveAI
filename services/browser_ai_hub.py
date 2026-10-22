@@ -23,6 +23,21 @@
 设置 UI / main / rag / application。playwright 仅在工厂函数内延迟 import；
 venv 未装 playwright 时本模块照常 import，暴露 PLAYWRIGHT_AVAILABLE=False，
 调用 chat/search 时优雅抛 BrowserUnavailable / 返回空结果（数字诚实）。
+
+────────────────────────────────────────────────────────────────────────
+R3.3-84｜CDP 挂载 + 节流（2026-10-16 融入自 EAgent 思路 / github.com/YaoGaoChaoLe/EAgent）
+    该项目的做法：用 Edge 的调试模式起 CDP，脚本连上去模拟人操作 DeepSeek 网页版，
+    拿到 0 token 的模型输出；并自加「字符长度限制 + 几秒延迟执行」降低被封概率。
+    与本模块比对后，只有两点是本模块原本缺的，故只补这两点（其余本模块已有且更全：
+    17 源 > 它 1 源、OpenAI 兼容封装、风控识别降级、多 profile 轮询）：
+      ① CDP 挂载（browser_ai.cdp_url）：connect_over_cdp 挂到【用户已经在用的浏览器】，
+         直接复用其现有登录态，零额外登录、零新 profile；与既有
+         launch_persistent_context（独立 profile，需单独登录一次）并存，CDP 优先。
+         CDP 模式下 close() 只断开调试连接，绝不关闭用户正在使用的浏览器窗口。
+      ② 节流（browser_ai.max_query_chars / browser_ai.min_interval）：把「限长 + 限速」
+         做成事前动作，降低触发风控的概率；与既有 detect_risk_control（事后识别并降级）互补。
+    三个新键默认全部关闭 / 不限（"" / 0 / 0），不改变原有行为。
+────────────────────────────────────────────────────────────────────────
 """
 from __future__ import annotations
 
@@ -297,9 +312,43 @@ class _RealBrowser:
             self._pw.stop()
 
 
+class _CdpBrowser:
+    """CDP 挂载封装：连到【用户已经开着的】浏览器，复用其真实登录态。
+
+    与 _RealBrowser 的差别：
+      - 页面从浏览器已有的 context 里开（用户 cookie / 登录态在那里），
+        没有 context 时才新建一个；
+      - close() 只 stop playwright 断开调试连接，**不调用 browser.close()**：
+        对 CDP 连接调 close() 会连带清理该浏览器上的上下文，可能打断用户
+        正在使用的窗口。用户的浏览器必须原样留着。
+    """
+
+    def __init__(self, pw, browser) -> None:
+        self._pw = pw
+        self._browser = browser
+
+    def new_page(self):
+        contexts = list(getattr(self._browser, "contexts", []) or [])
+        if contexts:
+            return contexts[0].new_page()
+        return self._browser.new_context().new_page()
+
+    def close(self) -> None:
+        try:
+            self._pw.stop()
+        except Exception:
+            pass
+
+
 def _launch_real_browser(user_data_dir: Optional[str] = None,
-                         headless: bool = True) -> _RealBrowser:
-    """启动 Chromium。user_data_dir 非空时用持久化上下文复用登录态/会话（方案2）。"""
+                         headless: bool = True,
+                         cdp_url: Optional[str] = None):
+    """启动 / 挂载浏览器。
+
+    cdp_url 非空 → CDP 挂载用户已在运行的浏览器（复用其登录态，零额外登录）；
+    user_data_dir 非空 → 持久化上下文复用登录态/会话（方案2）；
+    都没有 → 开一个全新 Chromium（headless 由配置决定）。
+    """
     from playwright.sync_api import sync_playwright  # 延迟 import
 
     # 基础 stealth：降低自动化指纹（a_bogus/msToken 仍由页面 JS 现算，这里只减被封概率）
@@ -312,6 +361,10 @@ def _launch_real_browser(user_data_dir: Optional[str] = None,
     ]
     p = sync_playwright().start()
     try:
+        if cdp_url:
+            # CDP 挂载：连到用户已用 --remote-debugging-port 打开的浏览器
+            browser = p.chromium.connect_over_cdp(cdp_url)
+            return _CdpBrowser(p, browser)
         if user_data_dir:
             handle = p.chromium.launch_persistent_context(
                 user_data_dir, headless=headless, args=stealth_args)
@@ -378,6 +431,27 @@ class BrowserAIHub:
     def _goto_timeout_ms(self) -> int:
         return int(self._per_source_timeout() * 1000)
 
+    # ---- R3.3-84 CDP 挂载 + 节流（三键默认全关，不改变原行为）---- #
+    def _cdp_url(self) -> str:
+        """CDP 挂载地址（如 http://127.0.0.1:9222）。空 = 关闭，走原逻辑。"""
+        return self._cfg("browser_ai.cdp_url", "").strip()
+
+    def _max_query_chars(self) -> int:
+        """单次发送的字符上限（防封限长）。0 = 不限。"""
+        try:
+            n = int(float(self.config.get("browser_ai.max_query_chars", "0")))
+        except (TypeError, ValueError):
+            n = 0
+        return n if n > 0 else 0
+
+    def _min_interval(self) -> float:
+        """相邻两源之间的最小间隔秒数（防封限速）。0 = 不限。"""
+        try:
+            v = float(self.config.get("browser_ai.min_interval", "0"))
+        except (TypeError, ValueError):
+            v = 0.0
+        return v if v > 0 else 0.0
+
     def _account_profiles(self) -> list:
         """多账号 profile 列表（每个=一个独立登录态目录）。
 
@@ -430,6 +504,11 @@ class BrowserAIHub:
                 "playwright 未安装：浏览器AI能力不可用（离线/未装环境优雅降级）。"
                 "请随包分发 Playwright/Chromium（R3.2-06）后启用。")
         headless = self._flag("browser_ai.headless", True)
+        cdp_url = self._cdp_url()
+        if cdp_url:
+            # CDP 挂载优先：直接借用户已在运行浏览器的登录态，不动 profile 目录
+            self._current_account = f"cdp:{cdp_url}"
+            return _launch_real_browser(headless=headless, cdp_url=cdp_url)
         # 多账号轮询：有 profile 列表则按游标轮换，复用各自已登录态
         profiles = self._account_profiles()
         if profiles:
@@ -456,7 +535,9 @@ class BrowserAIHub:
                     break
             if box is None:
                 return None, "invalid", "no_input_selector_visible"
-            box.fill(query)
+            # R3.3-84 防封限长：超长查询先截断再发送（0 = 不限）
+            cap = self._max_query_chars()
+            box.fill(query[:cap] if cap else query)
             box.press("Enter")
             self._sleep(float(source.get("wait", 10)))
             raw = page.inner_text(source.get("content_selector")
@@ -504,9 +585,17 @@ class BrowserAIHub:
         """逐源尝试，返回 (raw_text, source, attempts)；全部失败返回 (None, None, attempts)。"""
         browser = self._open_browser()
         attempts: list = []
+        last_start: Optional[float] = None
         try:
             for src in self.plan_order():
-                t0 = self._clock()
+                # R3.3-84 防封限速：相邻两源之间至少隔 min_interval 秒（默认 0=不限）
+                gap = self._min_interval()
+                if gap > 0 and last_start is not None:
+                    waited = self._clock() - last_start
+                    if waited < gap:
+                        self._sleep(gap - waited)
+                last_start = self._clock()
+                t0 = last_start
                 deadline = compute_deadline(t0, self._per_source_timeout())
                 raw, status, reason = self._drive(browser, src, query)
                 latency = self._clock() - t0
@@ -627,6 +716,10 @@ class BrowserAIHub:
             # R3.3-05：被风控降级的源清单 + 反爬诚实说明 + 多账号数
             "degraded": blocked,
             "account_count": len(self._account_profiles()),
+            # R3.3-84：CDP 挂载 + 节流 的实际生效值（透明展示，供设置页/诊断页回显）
+            "cdp_url": self._cdp_url(),
+            "max_query_chars": self._max_query_chars(),
+            "min_interval": self._min_interval(),
             "anti_bot_note": (
                 "a_bogus/msToken 等请求签名由目标站前端 JS 在浏览器内现算，"
                 "Playwright 驱动真实页面时由页面自动生成，本层不伪造；"

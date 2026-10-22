@@ -1,6 +1,6 @@
 # LoveAI v3.0 三人设端到端实测报告
 
-临时库: E:\Temp\loveai_3p_0fd_3vcx
+临时库: <E盘>\Temp\loveai_3p_0fd_3vcx
 
 
 ## 人设1 普通女生(焦虑型暧昧)

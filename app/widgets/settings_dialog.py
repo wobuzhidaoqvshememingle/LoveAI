@@ -20,6 +20,7 @@ class SettingsDialog(QDialog):
 
     settings_saved = Signal(dict)  # 设置保存时发射完整配置
     _scan_done = Signal(dict)       # 手动本地AI扫描完成（跨线程回主线程更新UI）
+    _free_router_snap_done = Signal(object)  # 免费通道路由快照取数完成（跨线程回主线程更新UI）
 
     def __init__(self, config, facade=None, parent=None):
         super().__init__(parent)
@@ -129,6 +130,55 @@ class SettingsDialog(QDialog):
         zero_lay.addWidget(self.zero_web_search)
         zero_lay.addWidget(self.zero_web_autofill)
         zero_lay.addWidget(self.zero_browser_ai)
+
+        # ---- 追加：免费通道路由状态（只读展示，v3.3 新增）----
+        # 数据源：FreeModelRouter.routing_snapshot()（冻结接口）。只读已存在的实例，
+        # 不调用 get_free_router()（首次创建会 probe_all() 联网探活），故不发外网请求、不阻塞 UI。
+        self.ui_free_router_title = QLabel("免费通道路由状态（只读 · 不改变路由决策）")
+        self.ui_free_router_title.setStyleSheet(
+            "color:#d4af37; font-size:12px; font-weight:bold;")
+        zero_lay.addWidget(self.ui_free_router_title)
+
+        self.ui_free_router_hint = QLabel(
+            "数据来自 FreeModelRouter.routing_snapshot()（本地只读快照）：动态惩罚分、四维限流用量"
+            "（rpm/rpd/tpm/tpd）、分级冷却、Sticky Session、最近一次实际路由均可在此查看"
+            "（生效分越小越优先；上限显示「未配」表示内核未配该维上限）。"
+            "本区只读取快照、不发外网请求，也不触发 probe_all 联网探活（内核枚举候选通道时"
+            "会探测本机 Ollama，仅回环 127.0.0.1 / ::1）；点「刷新」手动重取。")
+        self.ui_free_router_hint.setWordWrap(True)
+        self.ui_free_router_hint.setStyleSheet("color: #b0b0c0; font-size: 11px;")
+        zero_lay.addWidget(self.ui_free_router_hint)
+
+        fr_row = QHBoxLayout()
+        self.ui_free_router_state = QLabel(FREE_ROUTER_UNAVAILABLE_HINT)
+        self.ui_free_router_state.setWordWrap(True)
+        self.ui_free_router_state.setStyleSheet("color:#e0e0e0; font-size:11px;")
+        fr_row.addWidget(self.ui_free_router_state, stretch=1)
+        self.ui_free_router_refresh_btn = QPushButton("刷新")
+        self.ui_free_router_refresh_btn.setToolTip("重新读取本地只读快照（不发外网请求、不影响路由决策）")
+        self.ui_free_router_refresh_btn.clicked.connect(self._refresh_free_router_status)
+        fr_row.addWidget(self.ui_free_router_refresh_btn)
+        zero_lay.addLayout(fr_row)
+
+        self.ui_free_router_text = QTextEdit()
+        self.ui_free_router_text.setReadOnly(True)
+        self.ui_free_router_text.setMinimumHeight(120)
+        self.ui_free_router_text.setMaximumHeight(220)
+        self.ui_free_router_text.setStyleSheet(
+            "QTextEdit { background: #0f3460; color: #e0e0e0; border: 1px solid #d4af37;"
+            " font-family: Consolas, 'Courier New', monospace; font-size: 11px; }")
+        zero_lay.addWidget(self.ui_free_router_text)
+
+        self.ui_free_router_note = QLabel(FREE_ROUTER_FOOTER)
+        self.ui_free_router_note.setWordWrap(True)
+        self.ui_free_router_note.setStyleSheet("color:#b0b0c0; font-size:11px;")
+        zero_lay.addWidget(self.ui_free_router_note)
+
+        # 先渲染「不可用」骨架（无网络/无 key/Ollama 未起时也安全），再后台取一次真快照
+        self._free_router_snap_done.connect(self._on_free_router_snapshot)
+        self._apply_free_router_view(render_free_router_status(None, "尚未刷新"))
+        self._refresh_free_router_status()
+
         zero_group.setLayout(zero_lay)
         lay.addWidget(zero_group)
 
@@ -883,7 +933,7 @@ class SettingsDialog(QDialog):
             importer = getattr(self._facade, "_wechat_multi_importer", None) if self._facade else None
             monitor = getattr(self._facade, "_wechat_monitor", None) if self._facade else None
             self._wechat_export_widget = WechatExportWidget(
-                importer=importer, monitor=monitor, parent=self)
+                importer=importer, monitor=monitor, facade=self._facade, parent=self)
             return self._wechat_export_widget
         except Exception as e:
             logger.warning("微信导出 Tab 加载失败: %s", e)
@@ -892,3 +942,349 @@ class SettingsDialog(QDialog):
             lay.addWidget(QLabel("微信导出模块暂不可用（初始化失败）。"))
             lay.addStretch()
             return w
+
+    # ------------------------------------------------------------------ #
+    # 免费通道路由状态（只读，v3.3 新增）：取数 + 渲染适配
+    # 铁律：只读、不发外网请求、不改路由状态、不阻塞 UI 线程、任何异常都降级为「不可用」。
+    # ------------------------------------------------------------------ #
+    def _resolve_free_router(self):
+        """返回 (router_or_None, reason)。只取「已存在」的路由器实例，不触发任何网络动作。
+
+        取数链（自上而下，全防御）：
+          1) 外部注入回调 self.ui_free_router_source()（可选，供测试/其它调用方注入）；
+          2) facade.services["llm"]（LLMGateway），退化再试 facade._llm；
+          3) 该 gateway 上已存在的懒建实例 llm._free_router（或 llm.free_router）。
+        刻意不调用 LLMGateway.get_free_router()：其首次创建会执行 probe_all() 联网探活（预算 5s），
+        与「取数不发外网请求、不阻塞」冲突；因此路由器尚未创建时如实报「未创建」而不是替它初始化。
+        """
+        src = getattr(self, "ui_free_router_source", None)
+        if callable(src):
+            try:
+                return src(), ""
+            except Exception as e:  # noqa: BLE001 - 注入方异常不得拖垮设置面板
+                return None, f"注入的取数回调异常：{type(e).__name__}: {e}"
+
+        facade = getattr(self, "_facade", None)
+        if facade is None:
+            return None, "服务门面不可用（facade=None）"
+
+        llm = None
+        services = getattr(facade, "services", None)
+        if isinstance(services, dict):
+            try:
+                llm = services.get("llm")
+            except Exception:  # noqa: BLE001
+                llm = None
+        if llm is None:
+            try:
+                llm = getattr(facade, "_llm", None)
+            except Exception:  # noqa: BLE001
+                llm = None
+        if llm is None:
+            return None, "LLMGateway 未就绪（services['llm'] 为空）"
+
+        for attr in ("_free_router", "free_router"):
+            try:
+                router = getattr(llm, attr, None)
+            except Exception:  # noqa: BLE001
+                router = None
+            if router is not None:
+                return router, ""
+        return None, ("免费路由器实例尚未创建（未主动初始化：首次创建会触发联网探活，"
+                      "故在首次免费调用/后台刷新后才可用）")
+
+    def _fetch_free_router_snapshot(self):
+        """后台线程调用：返回 (snapshot_or_None, error_text)。全程不发外网请求、不改路由状态。"""
+        router, reason = self._resolve_free_router()
+        if router is None:
+            return None, reason
+
+        fn = getattr(router, "routing_snapshot", None)
+        if not callable(fn):
+            return None, "FreeModelRouter 未提供 routing_snapshot()（内核未就绪）"
+        try:
+            snap = fn()
+        except Exception as e:  # noqa: BLE001 - 内核异常不得拖垮设置面板
+            return None, f"routing_snapshot() 异常：{type(e).__name__}: {e}"
+        if snap is None:
+            return None, "routing_snapshot() 返回 None"
+        if not isinstance(snap, dict):
+            return None, f"routing_snapshot() 返回类型非法：{type(snap).__name__}"
+        return snap, ""
+
+    def _refresh_free_router_status(self):
+        """点「刷新」（或构造时自动调用一次）：后台线程取进程内快照，回主线程渲染。"""
+        try:
+            self.ui_free_router_refresh_btn.setEnabled(False)
+            self.ui_free_router_state.setText("读取中…（读取本地只读快照，不发外网请求）")
+        except Exception:  # noqa: BLE001
+            pass
+
+        def _worker():
+            snap, err = None, ""
+            try:
+                snap, err = self._fetch_free_router_snapshot()
+            except Exception as e:  # noqa: BLE001
+                snap, err = None, f"取数线程异常：{type(e).__name__}: {e}"
+            try:
+                self._free_router_snap_done.emit({"snapshot": snap, "error": err})
+            except Exception:  # noqa: BLE001
+                pass
+
+        import threading
+        threading.Thread(target=_worker, name="free-router-status", daemon=True).start()
+
+    def _on_free_router_snapshot(self, payload):
+        """主线程槽：把 {snapshot, error} 渲染进只读区；任何异常都不外泄。"""
+        try:
+            data = payload if isinstance(payload, dict) else {}
+            view = render_free_router_status(data.get("snapshot"), data.get("error") or "")
+            self._apply_free_router_view(view)
+        except Exception as e:  # noqa: BLE001
+            logger.debug("免费路由状态渲染失败: %s", e)
+        finally:
+            try:
+                self.ui_free_router_refresh_btn.setEnabled(True)
+            except Exception:  # noqa: BLE001
+                pass
+
+    def _apply_free_router_view(self, view):
+        """控件适配层：把纯函数 render_free_router_status() 的结果写进只读控件。"""
+        if not isinstance(view, dict):
+            view = render_free_router_status(None, "视图数据非法")
+        try:
+            self.ui_free_router_state.setText(
+                _fr_text(view.get("state_text"), "") or FREE_ROUTER_UNAVAILABLE_HINT)
+            self.ui_free_router_text.setPlainText(
+                "\n".join(_fr_text(x, "") for x in (view.get("lines") or [])))
+            self.ui_free_router_note.setText(
+                _fr_text(view.get("footer"), "") or FREE_ROUTER_FOOTER)
+        except Exception as e:  # noqa: BLE001
+            logger.debug("免费路由状态控件写入失败: %s", e)
+
+
+# ====================================================================== #
+# 免费通道路由状态：模块级纯函数（输入 snapshot dict → 输出展示视图）
+# 不依赖 Qt 事件循环，可被 tests/ 直接 import 单测。
+# 契约：纯函数（自身不触网、绝不抛异常）——方法/字段/类型任一缺失都降级为「不可用」或占位符。
+# ====================================================================== #
+FREE_ROUTER_UNAVAILABLE_HINT = "路由状态不可用（内核未就绪）"
+FREE_ROUTER_FOOTER = (
+    "说明：免费池为空时报空池，绝不回退到付费模型（fail-closed）。"
+    "落盘持久化、重启不清零：限流计数（按请求事件落盘，重启后回灌）、429 冷却等级与解锁时间、"
+    "Sticky 会话映射；落盘文件 data/free_router/router_state.db"
+    "（开发态=工程根 data/，冻结态=安装目录 data/；状态库打不开时会自动退化为纯内存）。"
+    "仅进程内、重启清零：动态惩罚分；「本次实际由」也只有本进程命中过才有值。"
+)
+FREE_ROUTER_COLUMNS = [
+    "通道", "基础优先级", "惩罚分", "生效分", "可用", "冷却剩余(s)", "冷却等级",
+    "rpm", "rpd", "tpm", "tpd", "成功", "失败", "延迟(ms)",
+]
+
+
+def _fr_num(value, default=0.0):
+    """任意值 → float；None/非法/NaN/±Inf 一律回落 default（不引入 math，保持零依赖）。"""
+    try:
+        out = float(value)
+    except (TypeError, ValueError):
+        return float(default)
+    if out != out or (out - out) != 0.0:  # NaN 或 ±Inf
+        return float(default)
+    return out
+
+
+def _fr_int(value, default=0):
+    """任意值 → int（经 float 容错）。"""
+    try:
+        return int(_fr_num(value, default))
+    except (TypeError, ValueError, OverflowError):
+        return int(default)
+
+
+def _fr_bool(value, default=False):
+    """任意值 → bool，容忍字符串 'true/1/yes/是' 等写法。"""
+    if isinstance(value, bool):
+        return value
+    if value is None:
+        return bool(default)
+    if isinstance(value, (int, float)):
+        return bool(value)
+    if isinstance(value, str):
+        return value.strip().lower() in ("1", "true", "yes", "y", "on", "是", "真")
+    return bool(default)
+
+
+def _fr_tri_bool(value):
+    """三态布尔：True / False / None（None = 无法判定，调用方**不得**当成 False 臆造结论）。"""
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return bool(value) if value in (0, 1) else None
+    if isinstance(value, str):
+        v = value.strip().lower()
+        if v in ("1", "true", "yes", "y", "on", "是", "真"):
+            return True
+        if v in ("0", "false", "no", "n", "off", "否", "假"):
+            return False
+    return None
+
+
+def _fr_text(value, default=""):
+    """任意值 → str；None 回落 default。"""
+    if value is None:
+        return default
+    if isinstance(value, str):
+        return value
+    return str(value)
+
+
+def _fr_limit_pair(used, cap):
+    """限流用量列：'已用/上限'；上限为 null（内核未配该维上限）时显示 '已用/未配'。"""
+    used_n = _fr_int(used, 0)
+    if cap is None or (isinstance(cap, str) and not cap.strip()):
+        return f"{used_n}/未配"
+    try:
+        cap_n = int(float(cap))
+    except (TypeError, ValueError):
+        return f"{used_n}/未配"
+    return f"{used_n}/{cap_n}"
+
+
+def _fr_fmt_ts(ts):
+    """epoch 秒 → 本地 'YYYY-MM-DD HH:MM:SS'；<=0 或非法时返回占位符。"""
+    v = _fr_num(ts, 0.0)
+    if v <= 0:
+        return "（无）"
+    try:
+        import time as _time
+        return _time.strftime("%Y-%m-%d %H:%M:%S", _time.localtime(v))
+    except Exception:  # noqa: BLE001 - 时间异常只降级为数字
+        return f"{v:.0f}"
+
+
+def render_free_router_status(snapshot, error=""):
+    """纯函数：FreeModelRouter.routing_snapshot() 的 dict（冻结接口）→ 展示视图。
+
+    返回 dict：
+      available(bool) / reason(str) / state_text(str)  —— 顶部一行状态
+      head(list[str]) / columns(list[str]) / rows(list[list[str]]) —— 顶部字段与逐通道行（结构化，便于断言）
+      lines(list[str]) —— 展示用文本（head + 通道块）
+      footer(str) —— 底部 fail-closed 说明
+      channel_count/eligible_count/cooling_count(int)
+    输入为 None/非 dict/字段缺失/类型异常时一律降级，不抛异常。
+    """
+    view = {
+        "available": False,
+        "reason": _fr_text(error, "").strip(),
+        "state_text": FREE_ROUTER_UNAVAILABLE_HINT,
+        "head": [],
+        "columns": list(FREE_ROUTER_COLUMNS),
+        "rows": [],
+        "states": [],
+        "lines": [],
+        "footer": FREE_ROUTER_FOOTER,
+        "channel_count": 0,
+        "eligible_count": 0,
+        "cooling_count": 0,
+    }
+    if not isinstance(snapshot, dict):
+        if not view["reason"]:
+            view["reason"] = ("未取到快照（内核未就绪）" if snapshot is None
+                              else f"快照类型非法：{type(snapshot).__name__}")
+        view["lines"] = [f"{FREE_ROUTER_UNAVAILABLE_HINT}：{view['reason']}"]
+        return view
+
+    generated_at = _fr_num(snapshot.get("generated_at"), 0.0)
+    last_via = _fr_text(snapshot.get("last_routed_via"), "").strip() or "（本次尚未路由过）"
+    sticky = _fr_int(snapshot.get("sticky_sessions"), 0)
+    raw_channels = snapshot.get("channels")
+    channels = raw_channels if isinstance(raw_channels, list) else []
+    mode = snapshot.get("mode") if isinstance(snapshot.get("mode"), dict) else {}
+
+    view["available"] = True
+    head = [
+        f"快照时间：{_fr_fmt_ts(generated_at)}",
+        f"本次实际由：{last_via}",
+        f"活跃 sticky 会话：{sticky}",
+        f"候选通道：{len(channels)} 条",
+    ]
+    # 落盘状态：内核附加字段 ``persistence`` = PersistentStateStore.status()（可能不存在）。
+    # 只按内核自报如实显示；``ok`` 用三态判定——无法判定（缺键/None/乱值）就不显示该行，
+    # 绝不把「不知道」渲染成「没落盘」。它决定「重启是否清零」，与底部说明互为印证。
+    persistence = snapshot.get("persistence")
+    if isinstance(persistence, dict):
+        store_ok = _fr_tri_bool(persistence.get("ok"))
+        if store_ok is True:
+            db_path = _fr_text(persistence.get("path"), "").strip() or "（内核未给出路径）"
+            head.append(f"落盘状态：已启用（重启不清零）→ {db_path}")
+        elif store_ok is False:
+            db_err = _fr_text(persistence.get("error"), "").strip()
+            head.append("落盘状态：未启用，已退化为纯内存（重启清零）"
+                        + (f"：{db_err}" if db_err else ""))
+    view["head"] = head
+
+    rows, states, cooling = [], [], 0
+    for item in channels:
+        ch = item if isinstance(item, dict) else {}
+        limits = ch.get("limits") if isinstance(ch.get("limits"), dict) else {}
+        provider = _fr_text(ch.get("provider"), "?") or "?"
+        model = _fr_text(ch.get("model"), "?") or "?"
+        base = _fr_int(ch.get("base_priority"), 0)
+        penalty = _fr_num(ch.get("penalty"), 0.0)
+        effective = _fr_num(ch.get("effective_score"), 0.0)
+        eligible = _fr_bool(ch.get("eligible"), False)
+        remaining = _fr_num(ch.get("remaining_sec"), 0.0)
+        level = _fr_int(ch.get("cooldown_level"), 0)
+        ok_n = _fr_int(ch.get("ok"), 0)
+        fail_n = _fr_int(ch.get("fail"), 0)
+        latency = _fr_num(ch.get("latency_ms"), 0.0)
+
+        if remaining > 0:
+            state = f"冷却中（{level} 级）"
+            cooling += 1
+        elif eligible:
+            state = "可用"
+        else:
+            state = "不可用"
+
+        rows.append([
+            f"{provider}:{model}", str(base), f"{penalty:.1f}", f"{effective:.1f}",
+            "是" if eligible else "否", f"{remaining:.0f}", str(level),
+            f"{_fr_limit_pair(limits.get('rpm_used'), limits.get('rpm'))}",
+            f"{_fr_limit_pair(limits.get('rpd_used'), limits.get('rpd'))}",
+            f"{_fr_limit_pair(limits.get('tpm_used'), limits.get('tpm'))}",
+            f"{_fr_limit_pair(limits.get('tpd_used'), limits.get('tpd'))}",
+            str(ok_n), str(fail_n), f"{latency:.1f}",
+        ])
+        states.append(state)
+
+    view["rows"] = rows
+    view["states"] = states
+    view["channel_count"] = len(rows)
+    view["eligible_count"] = len([s for s in states if s == "可用"])
+    view["cooling_count"] = cooling
+
+    lines = list(head)
+    lines.append("-" * 62)
+    if not rows:
+        lines.append("（候选通道 0 条：免费池为空，或候选目录尚未就绪；"
+                     "按 fail-closed 不会改道付费模型）")
+    for row, state in zip(rows, states):
+        lines.append(f"• {row[0]}  [{state}]")
+        lines.append(f"    基础优先级 {row[1]} | 惩罚分 {row[2]} | 生效分 {row[3]} | "
+                     f"冷却剩余 {row[5]}s（等级 {row[6]}）")
+        lines.append(f"    限流 rpm {row[7]} | rpd {row[8]} | tpm {row[9]} | tpd {row[10]}")
+        lines.append(f"    成功 {row[11]} | 失败 {row[12]} | 延迟 {row[13]}ms")
+    view["lines"] = lines
+
+    if not rows:
+        view["state_text"] = "候选通道 0 条（免费池为空或候选目录未就绪）"
+    else:
+        view["state_text"] = (f"已刷新：共 {len(rows)} 条候选通道，"
+                              f"{view['eligible_count']} 条可用，{cooling} 条冷却中")
+
+    footer = FREE_ROUTER_FOOTER
+    if mode and _fr_bool(mode.get("fail_closed"), True) is False:
+        footer += "【警告】快照声明 fail_closed=False，非预期状态，请检查路由内核。"
+    view["footer"] = footer
+    return view

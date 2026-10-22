@@ -56,7 +56,7 @@
 
 ## 启动验证
 - dev 精简核心：PID 存活、窗口"LoveAI v3.0 - LoveAI"、Responding=True；自动生成 data/logs/ollama_data/backups/models_local。
-- 静默全装(/VERYSILENT /TYPE=full 到 E:\Temp\LoveAITest)：退出码0。组件全部物理释放。
+- 静默全装(/VERYSILENT /TYPE=full 到 <E盘>\Temp\LoveAITest)：退出码0。组件全部物理释放。
 
 ## 终端用户冒烟结论
 - 知识库命中：{app}\data\unified_search.db 被打开并写大(302.69→343.63MB)、自动生成 rag_index_state.json → 预置库在 {app}\data 命中（契约A实际成立，知识服务走可写目录而非 _internal\data）。
@@ -78,7 +78,7 @@
 - ② pyinstaller：EXITCODE=0，Build complete。
 - ③ ISCC：EXITCODE=0（1139秒），installer_output\LoveAI_Setup_v2.0.0.exe=1532.7MB。
 
-## 终端用户复验（静默全装 E:\Temp\LoveAITest，/TYPE=full）
+## 终端用户复验（静默全装 <E盘>\Temp\LoveAITest，/TYPE=full）
 - 【重点1 便携ollama】通过但偏慢：应用拉起 安装目录 ollama_runtime\ollama.exe serve，PID=6384、PPID=27988(主程序)，监听127.0.0.1:11434，GET /api/tags HTTP200 返回 {"models":[]}。首次冷启动约30-60s（超过应用内5s轮询阈值，但进程最终驻留并服务）。
 - 【重点2 索引幂等】unified_search.db 保持释放时 302.69MB 未增长（修复前首启会涨到343.63MB重复建索引）；rag_index_state.json 生成在 {app}\data。初步证明不重复 INSERT。
 - 【重点3 db/logs落点】已修复：loveai.db 落在 {app}\data\loveai.db，_internal\data\loveai.db 已不存在；日志在 {app}\logs\loveai.log。
